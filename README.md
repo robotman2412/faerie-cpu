@@ -1,5 +1,6 @@
 
-# NanoProc (better name TBD.lol)
+# Faerie 8-bit CPU
+Size-optimized. WIP. The README is also WIP.
 
 # Instruction Set & Architecture
 Note: Zero-page pointers need a 2-byte alignment. The LSB of the 0-page pointer address is currently reserved.
