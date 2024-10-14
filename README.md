@@ -2,6 +2,8 @@
 # Faerie 8-bit CPU
 Size-optimized. WIP. The README is also WIP.
 
+Copyright © 2024, Julian Scheffers. Licenced under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+
 # Instruction Set & Architecture
 Note: Zero-page pointers need a 2-byte alignment. The LSB of the 0-page pointer address is currently reserved.
 
