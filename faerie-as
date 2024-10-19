@@ -1,0 +1,477 @@
+#!/usr/bin/env python3
+
+from enum import Enum
+import argparse
+type Token = str|int
+
+alu_modes = [
+    'shl',  'xor',  'add',  'or',
+    'shr',  'ld',   'sub',  'and',
+    'shlc', 'xorc', 'addc', 'orc',
+    'shrc', 'ldc',  'subc', 'andc'
+]
+branch_modes = [
+    'beq', 'bcs', 'bgt', 'blt',
+    'bne', 'bcc', 'ble', 'bge',
+    'j'
+]
+
+
+def tokenize(raw: str) -> list[Token]:
+    ls   = []
+    long = ['<<', '>>', '<=', '>=', '==', '!=', '&&', '||']
+    while raw:
+        # Labels and keywords.
+        if is_sym_char(raw[0], True):
+            tmp, raw = raw[0], raw[1:]
+            while raw and is_sym_char(raw[0]):
+                tmp, raw = tmp+raw[0], raw[1:]
+            if tmp[0] in '0123456789':
+                ls.append(int(tmp, 0))
+            else:
+                ls.append(tmp)
+        # Operators composed of two symbols.
+        elif len(raw[0]) >= 2 and raw[0:1] in long:
+            ls.append(raw[0:1])
+            raw = raw[2:]
+        # Other symbols.
+        elif ord(raw[0]) > 0x20:
+            ls.append(raw[0])
+            raw = raw[1:]
+        else:
+            raw = raw[1:]
+    return ls
+
+def is_sym_char(char: str, allow_numeric = True) -> bool:
+    n = ord(char)
+    if ord('a') <= n <= ord('z') or ord('A') <= n <= ord('Z'):
+        return True
+    elif allow_numeric and ord('0') <= n <= ord('9'):
+        return True
+    else:
+        return char in ['.', '_', '$']
+
+def is_sym_str(sym: str) -> bool:
+    if not is_sym_char(sym[0], False): return False
+    for char in sym[1:]:
+        if not is_sym_char(char): return False
+    return True
+
+
+def write_lhf(fd, data: list[int]):
+    fd.write("v2.0 raw\n")
+    for x in data:
+        fd.write(f"{x:x} ")
+    fd.flush()
+
+def write_bin(fd, data: list[int], dlen: int):
+    byte_count = (dlen + 7) // 8
+    for word in data:
+        for i in range(byte_count):
+            fd.write((word >> (i*8)) & 255)
+
+
+class AsmError(Exception):
+    def __init__(self, msg: str, line: int = None):
+        Exception.__init__(self, msg)
+        self.line = line
+
+
+class SymRef:
+    def __init__(self, offset=0, symbol=None):
+        self.offset = offset
+        self.symbol = symbol
+    
+    def assert_const(self):
+        if self.symbol != None:
+            raise AsmError("Expected constant, got symbol reference")
+    
+    def __repr__(self):
+        return f"SymRef({self.offset}, {repr(self.symbol)})"
+    
+    def __str__(self):
+        return f"{self.symbol} + {self.offset}" if self.symbol else f"{self.offset}"
+
+def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
+    args = args.copy()
+    # Define operators.
+    unary = {
+        '-': lambda a: -a,
+        '+': lambda a: a,
+        '!': lambda a: not a,
+        '~': lambda a: ~a,
+    }
+    unary_only = ['!', '~']
+    binary = [
+        {
+            '*':  lambda a, b: a * b,
+            '/':  lambda a, b: a // b,
+            '%':  lambda a, b: a % b
+        }, {
+            '-':  lambda a, b: a - b,
+            '+':  lambda a, b: a + b
+        }, {
+            '<<': lambda a, b: a << b,
+            '>>': lambda a, b: a >> b
+        }, {
+            '<=': lambda a, b: a <= b,
+            '>=': lambda a, b: a >= b,
+            '>':  lambda a, b: a > b,
+            '<':  lambda a, b: a < b
+        }, {
+            '==': lambda a, b: a == b,
+            '!=': lambda a, b: a != b
+        }, {
+            '&':  lambda a, b: a & b
+        }, {
+            '^':  lambda a, b: a ^ b
+        }, {
+            '|':  lambda a, b: a | b
+        }, {
+            '&&': lambda a, b: a and b
+        }, {
+            '||': lambda a, b: a or b
+        }
+    ]
+    valid_op = unary_only.copy()
+    for set in binary:
+        valid_op.extend(set.keys())
+    
+    # Pass 0: Convert stuff to Relocation.
+    for i in range(len(args)):
+        if type(args[i]) == SymRef:
+            pass
+        elif args[i] in equ:
+            args[i] = SymRef(equ[args[i]])
+        elif type(args[i]) == int:
+            args[i] = SymRef(args[i])
+        elif is_sym_str(args[i]):
+            args[i] = SymRef(0, args[i])
+        elif args[i] not in valid_op and args[i] not in '()':
+            raise AsmError(f"`{args[i]}` not expected here")
+    
+    # Pass 1: Recursively evaluate parenthesized exprs.
+    i = 0
+    while i < len(args):
+        if args[i] == ')':
+            raise AsmError("Unmatched closing parenthesis")
+        if args[i] != '(':
+            i += 1
+            continue
+        x     = i + 1
+        depth = 1
+        while depth:
+            if x >= len(args):
+                raise AsmError("Unmatched opening parenthesis")
+            if args[x] == '(': depth += 1
+            if args[x] == ')': depth -= 1
+            x += 1
+        args = args[:i] + [parse_expr(args[i+1:x-1])] + args[x:]
+        i += 1
+    
+    # Pass 2: Collapse prefix operators.
+    i = len(args)-1
+    while i > 0:
+        if type(args[i]) != str and args[i-1] in unary and (i == 1 or type(args[i-2]) == str):
+            if args[i-1] != '+': args[i].assert_const()
+            args = args[:i-1] + [SymRef(unary[args[i-1]](args[i].offset))] + args[i+1:]
+        i -= 1
+    
+    # Pass 3: Binary operators.
+    if type(args[0]) == str:
+        raise AsmError(f"`{args[0]}` not expected here")
+    for oper in binary:
+        i = 0
+        while i < len(args)-2:
+            if type(args[i+1]) != str: raise AsmError(f"`{args[i+1]}` not expected here")
+            if type(args[i+2]) == str: raise AsmError(f"`{args[i+2]}` not expected here")
+            if args[i+1] in oper:
+                # Enforce exprs to be additive w.r.t. symbols.
+                if args[i+1] != '+':
+                    args[i+2].assert_const()
+                    if args[i+1] != '-':
+                        args[i].assert_const()
+                # Calculate the constant expr.
+                if args[i].symbol and args[i+2].symbol:
+                    raise AsmError("Can't add twp symbols to each other")
+                symbol = args[i].symbol or args[i+2].symbol
+                args = args[:i] + [SymRef(oper[args[i+1]](args[i].offset, args[i+2].offset), symbol)] + args[i+3:]
+            else:
+                i += 2
+    
+    if type(args[0]) != SymRef:
+        raise AsmError(f"`{args[0]}` not expected here")
+    return args[0]
+
+
+class RelocType(Enum):
+    MEMLO = 0
+    MEMHI = 1
+    ZPAGE = 2
+    ZPPTR = 3
+    BYTE  = 4
+
+class Reloc:
+    def __init__(self, addr: int, sym: SymRef, type: RelocType, line: int=None):
+        self.addr = addr
+        self.sym  = sym
+        self.type = type
+        self.line = line
+
+
+def an(s):
+    return f'an {s}' if s[0] in 'aeiou' else f'a {s}'
+
+def expect(actual, expected):
+    if actual != expected: raise AsmError(f"Expected `{actual}`, got `{expected}`")
+    return actual
+
+def exptype(obj, expected: type):
+    if type(obj) != expected: raise AsmError(f"Expected {an(expected.__name__)}, got {an(type(obj).__name__)} `{obj}`")
+    return obj
+
+def explabel(obj: str):
+    if not is_sym_str(obj): raise AsmError(f"Expected label, got `{obj}`")
+    return obj
+
+def listexpect(list, index, expected):
+    try:
+        return expect(list[index], expected)
+    except IndexError:
+        raise AsmError(f"Expected `{expected}`")
+
+def listexptype(list, index, expected: type):
+    try:
+        return exptype(list[index], expected)
+    except IndexError:
+        raise AsmError(f"Expected {an(expected.__name__)}")
+
+def listexplabel(list, index):
+    try:
+        return explabel(list[index])
+    except IndexError:
+        raise AsmError("Expected label")
+
+
+def assemble(infd, filename: str) -> tuple[list[int], dict[int, int], dict[str,int]]:
+    symbols: dict[str,int] = {}
+    equ:     dict[str,int] = {}
+    reloc:   list[Reloc]   = []
+    out:     list[int]     = []
+    a2l:     dict[int,int] = {}
+    addr = 0
+    line = 0
+    
+    
+    def write_byte(value: int):
+        nonlocal out, addr, a2l, i
+        a2l[addr] = i + 1
+        out.append(value)
+        addr += 1
+    
+    def write_symref(ref: SymRef, type: RelocType):
+        nonlocal out, reloc, addr, a2l, i
+        a2l[addr] = i + 1
+        reloc.append(Reloc(addr, ref, type, line))
+        out.append(0)
+        addr += 1
+    
+    def handle_label(label: str):
+        nonlocal symbols, equ, addr
+        if label in equ:
+            raise AsmError(f"Label redefines equation `{label}`")
+        if label in symbols:
+            raise AsmError(f"Redefinition of {label}")
+        symbols[label] = addr
+    
+    def handle_directive(directive: str, args: list[Token]):
+        nonlocal equ, symbols, addr
+        if directive == 'equ':
+            listexplabel(args, 0)
+            listexpect(args, 1, ',')
+            if len(args) < 3: raise AsmError("Expected an expression")
+            if args[0] in symbols: raise AsmError(f"Equation redefines label `{args[0]}`")
+            expr = parse_expr(args[2:], equ)
+            expr.assert_const()
+            equ[args[0]] = expr.offset
+            
+        elif directive == 'org':
+            if len(args) < 1: raise AsmError("Expected an expression")
+            expr = parse_expr(args[1:], equ)
+            expr.assert_const()
+            if expr.offset < addr: raise AsmError(f".{directive} directive goes backwards")
+            addr = expr.offset
+            
+        elif directive == 'byte':
+            if len(args) < 1: raise AsmError("Expected an expression")
+            while args:
+                if ',' in args:
+                    comma = args.index(',')
+                    expr, args = parse_expr(args[:comma]), args[comma+1:]
+                else:
+                    expr, args = parse_expr(args), []
+                write_symref(expr)
+            
+        else:
+            raise AsmError(f"Uknown directive `{directive}`")
+    
+    def handle_insn(args: list[Token]):
+        nonlocal equ, symbols, reloc
+        name, args = args[0].lower(), args[1:]
+        if name == 'cmp': name = 'sub.cmp'
+        
+        # Classify opcode and mode.
+        allow_imm = True
+        if name in alu_modes:
+            # ALU ops.
+            has_args  = name[:2] != 'sh'
+            mode      = alu_modes.index(name)
+            opcode    = 0
+        elif name.endswith('.cmp') and name[:-4] in alu_modes:
+            # ALU ops (compare mode).
+            has_args  = name[:2] != 'sh'
+            mode      = alu_modes.index(name[:-4])
+            opcode    = 1
+        elif name == 'sb':
+            # Store ops.
+            has_args = True
+            mode      = 0
+            opcode    = 2
+            allow_imm = False
+        elif name in branch_modes:
+            # Branch ops.
+            has_args  = False
+            mode      = branch_modes.index(name)
+            opcode    = 3
+        else:
+            raise AsmError("Unknown instruction")
+        
+        # Parse addressing mode and arguments.
+        if not has_args and not args:
+            # No args.
+            amode = 0
+        elif not has_args:
+            # Instruction has no args but something was supplied anyway.
+            raise AsmError(f"Instruction {name} does not take arguments")
+        elif has_args and not args:
+            # Instruction has args but nothing was supplied.
+            supp = " or expression" if allow_imm else ""
+            raise AsmError(f"Instruction {name} expects memory reference"+supp)
+        elif len(args) >= 3 and args[0] == '(' and args[-1] == ')':
+            # Zero-page pointer.
+            amode = 1
+            val   = parse_expr(args[1:-1], equ)
+        elif len(args) >= 4 and args[0] in ['zp', 'zpage', 'zeropage'] and args[1] == '[' and args[-1] == ']':
+            # Memory reference (explicitly zero-page).
+            amode = 0
+            val   = parse_expr(args[2:-1], equ)
+        elif len(args) >= 3 and args[0] == '[' and args[-1] == ']':
+            # Memory reference.
+            val   = parse_expr(args[1:-1], equ)
+            if val.symbol or val.offset & 0x100:
+                amode = 2 # Need 16-bit address
+            else:
+                amode = 1 # Relaxed to 0-page address
+        elif not allow_imm:
+            # Instruction does not allow imm but it was supplied anyway.
+            raise AsmError(f"Instruction {name} expects memory reference but got `{' '.join(args)}`")
+        else:
+            # Constant expression.
+            amode = 3
+            val   = parse_expr(args, equ)
+        
+        # Emit instruction.
+        write_byte(opcode | (amode << 2) | (mode << 4))
+        if not has_args:
+            pass
+        elif amode == 0:
+            write_symref(val, RelocType.ZPAGE)
+        elif amode == 1:
+            write_symref(val, RelocType.ZPPTR)
+        elif amode == 2:
+            write_symref(val, RelocType.MEMLO)
+            write_symref(val, RelocType.MEMHI)
+        else:
+            write_symref(val, RelocType.BYTE)
+    
+    
+    # Pass 1: Write data and reloc entries, find labels.
+    lines: list[str] = infd.readlines()
+    for i in range(len(lines)):
+        line   = i + 1
+        tokens = tokenize(lines[i])
+        try:
+            if len(tokens) >= 2 and is_sym_str(tokens[0]) and tokens[1] == ':':
+                handle_label(tokens[0])
+                tokens = tokens[2:]
+            if len(tokens) == 0: continue
+            if tokens[0][0] == '.':
+                handle_directive(tokens[0][1:], tokens[1:])
+            else:
+                handle_insn(tokens)
+        except AsmError as e:
+            raise AsmError(*e.args, i+1)
+    
+    # Pass 2: Apply relocations.
+    for rel in reloc:
+        if rel.sym.symbol:
+            if rel.sym.symbol not in symbols:
+                raise AsmError(f"Undefined reference to `{rel.sym.symbol}`", rel.line)
+            relval = symbols[rel.sym.symbol] + rel.sym.offset
+        else:
+            relval = rel.sym.offset
+        
+        # Check relocation constraints.
+        match rel.type:
+            case RelocType.ZPAGE:
+                if relval < 0 or relval > 255:
+                    raise AsmError(f"Zero-page address {relval} out of range (0-255)")
+            case RelocType.ZPPTR:
+                if relval < 0 or relval > 255:
+                    raise AsmError(f"Zero-page address {relval} out of range (0-255)")
+                if relval & 1:
+                    raise AsmError(f"Zero-page pointer address {relval} misaligned (should be 16-bit aligned)")
+            case RelocType.MEMLO:
+                if relval < 0 or relval > 65535:
+                    raise AsmError(f"Address {relval} out of range (0-65535)")
+            case RelocType.MEMHI:
+                if relval < 0 or relval > 65535:
+                    raise AsmError(f"Address {relval} out of range (0-65535)")
+                relval >>= 8
+            case RelocType.BYTE:
+                if relval < -128 or relval > 255:
+                    print(f"Warning {filename}:{rel.line}: Value truncated from {relval} to {relval & 255}")
+        
+        # Update the byte.
+        out[rel.addr] = relval & 255
+    
+    return out, a2l, symbols
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Assembler for the Faerie CPU")
+    parser.add_argument("-o", "--outfile", action="store", default="out.lhf")
+    parser.add_argument("--format",        action="store", choices=["binary", "logisim"], default="logisim")
+    parser.add_argument("infile",          action="store")
+    args = parser.parse_args()
+    
+    with open(args.infile, "r") as fd:
+        try:
+            out, a2l, symbols = assemble(fd, args.infile)
+        except AsmError as e:
+            print(f"Error {args.infile}:{e.line}: {e.args[0]}")
+            exit(1)
+    
+    if args.format == "logisim":
+        with open(args.outfile, "w") as fd:
+            write_lhf(fd, out)
+    else:
+        with open(args.outfile, "wb") as fd:
+            write_bin(fd, out, 8)
+    
+    if len(symbols):
+        print("Symbols:")
+        for symname in symbols:
+            print(f"  {symname:10} = 0x{symbols[symname]:x}")
+    else:
+        print("No symbols defined")
