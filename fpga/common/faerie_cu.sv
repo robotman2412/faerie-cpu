@@ -41,6 +41,11 @@ module faerie_cu#(
     // Increment the value of AL for 0page pointer amode.
     output logic inc_al
 );
+    // Instruction register.
+    reg [7:0] insn_reg;
+    // Current instruction.
+    wire[7:0] insn;
+    
     // FSM register.
     reg [7:0] fsm_reg;
     // Current FSM state.
@@ -59,6 +64,20 @@ module faerie_cu#(
     wire   alu     = fsm[5];
     wire   msm_st  = fsm[6];
     assign branch  = fsm[7];
+    
+    // IR & FSM logic.
+    generate
+        if (sync_read) begin
+            reg p_insn_ld;
+            always @(posedge clk) begin
+                p_insn_ld <= insn_ld && !rst;
+            end
+            
+            assign insn = p_insn_ld ? rdata : insn_reg;
+        end else begin
+            assign insn = insn_ld ? rdata : insn_reg;
+        end
+    endgenerate
     
     // Control signal generation.
     assign we      = mem_ld;
