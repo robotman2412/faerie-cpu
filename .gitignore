@@ -3,3 +3,4 @@ build
 .vscode
 out.lhf
 out.bin
+lsp.out

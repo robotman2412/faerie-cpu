@@ -1311,6 +1311,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Assembler for the Faerie CPU\nhttps://github.com/robotman2412/faerie-cpu")
     parser.add_argument("--lsp",           action="store_true", help="Ignore all other arguments and start in language server mode")
     parser.add_argument("--stdio",         action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--lsp-debug",     action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--outfile", "-o", action="store", default="out.lhf")
     parser.add_argument("--format", "-O",  action="store", choices=["binary", "logisim"], default="logisim")
     parser.add_argument("infile",          action="store", nargs="?")
@@ -1318,13 +1319,20 @@ if __name__ == "__main__":
     
     if args.lsp:
         _on_msg_handler = log_msg
-        with open("/home/julian/the_fpga/nanoproc/lsp.out", "a") as fd:
+        if 0: # Set to 1 for debugging.
+            fd = open("/home/julian/the_fpga/nanoproc/lsp.out", "a")
             sys.stderr = debug = fd
             try:
                 lsp_main()
             except Exception as e:
                 traceback.print_exc(file=debug)
                 debug.flush()
+                exit(1)
+        else:
+            try:
+                lsp_main()
+            except:
+                exit(1)
         exit(0)
     
     out = a2l = symbols = None
