@@ -1,0 +1,91 @@
+
+    .equ a0,  0x80
+    .equ a1,  0x81
+    .equ a2,  0x82
+    .equ a3,  0x83
+    .equ a4,  0x84
+    .equ a5,  0x85
+    .equ a6,  0x86
+    .equ a7,  0x87
+
+
+
+    .org 0xc000
+_start:
+    li   0
+    st   [a0]
+    st   [a5]
+    li   0x80
+    st   [a1]
+    li   %lo(img)
+    st   [a2]
+    li   %hi(img)
+    st   [a3]
+    li   32
+    st   [a4]
+    j    [memcpy]
+hlt:
+    j    [hlt]
+
+
+
+memcpy.loop:
+    ld   (a2)
+    st   (a0)
+    ld   [a0]
+    add  1
+    st   [a0]
+    ld   [a1]
+    addc 0
+    st   [a1]
+    ld   [a2]
+    add  1
+    st   [a2]
+    ld   [a3]
+    addc 0
+    st   [a3]
+memcpy:
+    ld   [a4]
+    sub  1
+    st   [a4]
+    ld   [a5]
+    subc 0
+    st   [a5]
+    bge  [memcpy.loop]
+    ret
+
+
+
+img:
+    .byte 0b00000000
+    .byte 0b00001000
+    .byte 0b01000100
+    .byte 0b00000100
+    .byte 0b00000100
+    .byte 0b01000100
+    .byte 0b00001000
+    .byte 0b00000000
+    .byte 0b00000000
+    .byte 0b00001000
+    .byte 0b01000100
+    .byte 0b00000100
+    .byte 0b00000100
+    .byte 0b01000100
+    .byte 0b00001000
+    .byte 0b00000000
+    .byte 0b00000000
+    .byte 0b00001000
+    .byte 0b01000100
+    .byte 0b00000100
+    .byte 0b00000100
+    .byte 0b01000100
+    .byte 0b00001000
+    .byte 0b00000000
+    .byte 0b00000000
+    .byte 0b00001000
+    .byte 0b01000100
+    .byte 0b00000100
+    .byte 0b00000100
+    .byte 0b01000100
+    .byte 0b00001000
+    .byte 0b00000000

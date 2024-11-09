@@ -9,17 +9,17 @@
 // Verilog implementation of Faerie's ALU.
 module faerie_alu(
     // Mode bits.
-    input  logic[3:0] mode,
+    input  wire[3:0] mode,
     // Value of carry flag.
-    input  logic      cin,
+    input  wire      cin,
     // Left-hand side operand.
-    input  logic[7:0] a,
+    input  wire[7:0] a,
     // Right-hand side operand.
-    input  logic[7:0] b,
+    input  wire[7:0] b,
     // Arithmetic result.
-    output logic[7:0] q,
+    output wire[7:0] q,
     // Carry out.
-    output logic      cout
+    output wire      cout
 );
     wire      cc      = mode[3];
     wire      sub_and = mode[2];

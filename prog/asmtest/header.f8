@@ -1,0 +1,6 @@
+
+#include "header2.f8"
+
+MyFunnyMacro
+
+#define my_insn li 1 + 2 * 3 / 4 % 5

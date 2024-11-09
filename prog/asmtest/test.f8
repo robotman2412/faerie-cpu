@@ -1,0 +1,13 @@
+
+#include "notexists.f8"
+#include "header.f8"
+
+li 1
+
+li [thing]
+add -999
+
+
+
+
+my_insn

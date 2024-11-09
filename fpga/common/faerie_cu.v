@@ -12,34 +12,36 @@ module faerie_cu#(
     parameter bit sync_read  = 1
 )(
     // CPU clock.
-    input  logic      clk,
+    input  wire      clk,
     // Synchronous reset.
-    input  logic      rst,
+    input  wire      rst,
     // Memory read data.
-    input  logic[7:0] rdata,
+    input  wire[7:0] rdata,
+    // ALU / branch mode.
+    output wire[3:0] mode,
     
     // Memory write enable.
-    output logic we,
+    output wire we,
     // Memory read enable.
-    output logic re,
+    output wire re,
     // Write to PC if branch condition is satisfied.
-    output logic branch,
+    output wire branch,
     // Use PC, not AR, as address.
-    output logic pc_addr,
+    output wire pc_addr,
     // Write to low byte of AR.
-    output logic set_al,
+    output wire set_al,
     // Write to high byte of AR.
-    output logic set_ah,
+    output wire set_ah,
     // Use zero-page addressing mode.
-    output logic zp_addr,
+    output wire zp_addr,
     // Reset B register.
-    output logic reset_b,
+    output wire reset_b,
     // Write flags to flags register.
-    output logic set_fr,
+    output wire set_fr,
     // Write ALU result to accumulator.
-    output logic set_a,
+    output wire set_a,
     // Increment the value of AL for 0page pointer amode.
-    output logic inc_al
+    output wire inc_al
 );
     // Instruction register.
     reg [7:0] insn_reg;
@@ -79,8 +81,18 @@ module faerie_cu#(
         end
     endgenerate
     
+    always @(posedge clk) begin
+        if (rst) begin
+            fsm_reg  <= sync_read ? 8'h80 : 0;
+            insn_reg <= 'bz;
+        end else begin
+            fsm_reg  <= fsm_next;
+            insn_reg <= insn;
+        end
+    end
+    
     // Control signal generation.
-    assign we      = mem_ld;
+    assign we      = mem_st;
     assign re      = mem_ld || insn_ld || addr_1 || addr_2 || ptr_1 || ptr_2;
     assign pc_addr = insn_ld || (mem_ld && insn[2] && insn[3]);
     assign set_al  = addr_1 || ptr_2;
@@ -97,11 +109,11 @@ endmodule
 // Computes the next state in the control unit FSM.
 module faerie_cu_fsm(
     // Current instruction.
-    input  logic[7:0] insn,
+    input  wire[7:0] insn,
     // Previous state.
-    input  logic[7:0] prev,
+    input  wire[7:0] prev,
     // Next state.
-    output logic[7:0] next
+    output wire[7:0] next
 );
     wire ild  = prev == 0;
     wire exec = prev[1] | prev[3] | (ild && (insn[2] && insn[3])) | (prev[0] && !insn[2] && !insn[3]);

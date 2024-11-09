@@ -1,0 +1,4 @@
+
+#define MyFunnyMacro `
+
+#include "infinite.f8"
