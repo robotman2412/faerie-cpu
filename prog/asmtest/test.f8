@@ -7,7 +7,6 @@ li 1
 li [thing]
 add -999
 
-
-
-
 my_insn
+
+li [-1]

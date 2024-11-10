@@ -1,0 +1,25 @@
+
+#define add_mc(maddr, val)  ld [maddr]; add  val; st [maddr]
+#define addc_mc(maddr, val) ld [maddr]; addc val; st [maddr]
+
+#define add2_mc(maddr, val)  add_mc( maddr, (val) & 0xff); addc_mc((maddr)+1, (val) >> 8)
+#define addc2_mc(maddr, val) addc_mc(maddr, (val) & 0xff); addc_mc((maddr)+1, (val) >> 8)
+
+#define add4_mc(maddr, val)  add2_mc( maddr, (val) & 0xffff); addc2_mc((maddr)+2, (val) >> 16)
+#define addc4_mc(maddr, val) addc2_mc(maddr, (val) & 0xffff); addc2_mc((maddr)+2, (val) >> 16)
+
+#define add8_mc(maddr, val)  add4_mc( maddr, (val) & 0xffffffff); addc4_mc((maddr)+4, (val) >> 32)
+#define addc8_mc(maddr, val) addc4_mc(maddr, (val) & 0xffffffff); addc4_mc((maddr)+4, (val) >> 32)
+
+
+#define add_mm( maddr_a, maddr_b) ld [maddr_a]; add  [maddr_b]; st [maddr_a]
+#define addc_mm(maddr_a, maddr_b) ld [maddr_a]; addc [maddr_b]; st [maddr_a]
+
+#define add2_mm( maddr_a, maddr_b) add_mm( maddr_a, (maddr_b) & 0xff); addc_mm((maddr_a)+1, (maddr_b) >> 8)
+#define addc2_mm(maddr_a, maddr_b) addc_mm(maddr_a, (maddr_b) & 0xff); addc_mm((maddr_a)+1, (maddr_b) >> 8)
+
+#define add4_mm( maddr_a, maddr_b) add2_mm( maddr_a, (maddr_b) & 0xffff); addc2_mm((maddr_a)+2, (maddr_b) >> 16)
+#define addc4_mm(maddr_a, maddr_b) addc2_mm(maddr_a, (maddr_b) & 0xffff); addc2_mm((maddr_a)+2, (maddr_b) >> 16)
+
+#define add8_mm( maddr_a, maddr_b) add4_mm( maddr_a, (maddr_b) & 0xffffffff); addc4_mm((maddr_a)+4, (maddr_b) >> 32)
+#define addc8_mm(maddr_a, maddr_b) addc4_mm(maddr_a, (maddr_b) & 0xffffffff); addc4_mm((maddr_a)+4, (maddr_b) >> 32)

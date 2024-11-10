@@ -48,7 +48,7 @@ class SourceFile:
 class Location:
     def __init__(self, \
             file: SourceFile, off: int, line: int, col: int, len: int = 1, \
-            inc_from: Self = None, exp_from: Self = None):
+            inc_from: Self = None, exp_from: Self = None, macro: str = None):
         self.file     = file
         self.off      = off
         self.line     = line
@@ -56,13 +56,13 @@ class Location:
         self.len      = len
         self.inc_from = inc_from
         self.exp_from = exp_from
-        self.macro    = None
+        self.macro    = macro
     
     def __str__(self):
         return f"{self.file.name}:{self.line}:{self.col}"
     
     def __repr__(self):
-        return f"Location(file <{repr(self.file.name)}>, {self.off}, {self.line}, {self.col}, {self.len}, {repr(self.inc_from)}, {repr(self.exp_from)})"
+        return f"Location(file <{repr(self.file.name)}>, {self.off}, {self.line}, {self.col}, {self.len}, {repr(self.inc_from)}, {repr(self.exp_from)}, {repr(self.macro)})"
     
     def show(self):
         # Find the start of the line before this location.
@@ -91,7 +91,7 @@ class Location:
             print("     | " + ' ' * (self.col-1) + '^' + '~' * (self.len-1))
     
     def copy(self) -> Self:
-        return Location(self.file, self.off, self.line, self.col, self.len, self.inc_from, self.exp_from)
+        return Location(self.file, self.off, self.line, self.col, self.len, self.inc_from, self.exp_from, self.macro)
     
     def end_location(self) -> Self:
         new = self.copy()
@@ -122,7 +122,12 @@ class Location:
     
     def with_exp_from(self, exp_from: Self) -> Self:
         new = self.copy()
-        new.exp_from = exp_from
+        if new.exp_from:
+            exp_from = exp_from.copy()
+            exp_from.exp_from = new.exp_from
+            new.exp_from = exp_from
+        else:
+            new.exp_from = exp_from
         return new
     
     def with_len(self, len: int) -> Self:
@@ -165,14 +170,16 @@ def print_msg(type: Severity, msg: str, loc: Location = None):
         link = link.inc_from
     
     # Show macro it was expanded from.
-    if loc.exp_from:
+    file = loc.file
+    while loc.exp_from:
         _print(Severity.HINT, f"Expanded from macro {loc.exp_from.macro}", str(loc.exp_from))
         loc.exp_from.show()
         link = loc.exp_from
-        while link.inc_from and link.file is not loc.file:
+        while link.inc_from and link.file is not file:
             _print(Severity.HINT, f"Included from {link.file.name}", str(link.inc_from))
             link.inc_from.show()
             link = link.inc_from
+        loc = loc.exp_from
 
 _msg_log: list[tuple[Severity,str,Location]] = []
 
@@ -452,27 +459,34 @@ class Tokenizer(Iterable[Token]):
                 loc  = stream.loc()
                 char = next(stream, None)
 
-def is_sym_char(char: str, allow_numeric = True) -> bool:
+def is_sym_char(char: str, allow_numeric = True, allow_period = True) -> bool:
     n = ord(char)
     if ord('a') <= n <= ord('z') or ord('A') <= n <= ord('Z'):
         return True
     elif allow_numeric and ord('0') <= n <= ord('9'):
         return True
+    elif allow_period and char == '.':
+        return True
     else:
-        return char in ['.', '_', '$']
+        return char == '_' or char == '$'
 
-def is_sym_str(sym: str) -> bool:
-    if not is_sym_char(sym[0], False): return False
+def is_sym_str(sym: str, allow_period = True) -> bool:
+    if not is_sym_char(sym[0], False, allow_period): return False
     for char in sym[1:]:
-        if not is_sym_char(char): return False
+        if not is_sym_char(char, True, allow_period): return False
     return True
 
 
+class MacroDef:
+    def __init__(self, params: list[str], tokens: list[Token]):
+        self.params = params
+        self.tokens = tokens
+
 class Preprocessor(Iterable[Token]):
-    def __init__(self, tokens: Iterator[Token], inc_path: list[str] = ['.'], defines: dict[str,list[Token]] = {}):
+    def __init__(self, tokens: Iterator[Token], inc_path: list[str] = ['.'], macros: dict[str,MacroDef] = {}):
         self.stack    = [tokens]
         self.inc_path = inc_path
-        self.defines  = defines
+        self.macros   = macros
     
     def find_include_file(self, name: str, relative_to: str = None) -> str:
         if relative_to:
@@ -527,9 +541,9 @@ class Preprocessor(Iterable[Token]):
         tkn: Token = next(self.stack[-1], None)
         if tkn == None:
             raise_err("#define expects an identifier", loc); return
-        elif tkn.type != TokenType.IDENTIFIER or not is_sym_str(tkn.val):
+        elif tkn.type != TokenType.IDENTIFIER or not is_sym_str(tkn.val, allow_period=False):
             raise_err("#define expects an identifier", tkn.loc); return
-        macro_name = tkn.val
+        macro_name = tkn
         
         # Get all remaining tokens on this line.
         tmp: list[Token] = []
@@ -539,21 +553,154 @@ class Preprocessor(Iterable[Token]):
             # Add the macro name to the location.
             tmp.append(tkn.with_loc(tkn.loc.as_macro(macro_name)))
         
-        if tkn.val in self.defines:
+        params: list[str] = []
+        if tmp[0] == Token('(', TokenType.OTHER) and tmp[0].loc.off == macro_name.loc.off + len(macro_name.val):
+            # Parameterized macro; get parameters list.
+            tmp = tmp[1:]
+            if len(tmp) and tmp[0] == Token(')', TokenType.OTHER):
+                tmp = tmp[1:]
+            else:
+                while True:
+                    if len(tmp) < 2:
+                        raise_err("Expected `)`", loc); return
+                    elif tmp[0].type != TokenType.IDENTIFIER or not is_sym_str(tmp[0].val, allow_period=False):
+                        raise_err("Macro parameter expects an identifier", tmp[0].loc)
+                    params.append(tmp[0].val)
+                    if tmp[1] == Token(',', TokenType.OTHER):
+                        tmp = tmp[2:]
+                    elif tmp[1] == Token(')', TokenType.OTHER):
+                        tmp = tmp[2:]; break
+                    else:
+                        raise_err("Expected `)` or `,`", tmp[1].loc); return
+        
+        if macro_name.val in self.macros:
             # Warn on redefinition.
-            raise_warn(f"Redefinition of {tkn.val}", loc)
-        self.defines[macro_name] = tmp
+            raise_warn(f"Redefinition of {macro_name.val}", loc)
+        self.macros[macro_name.val] = MacroDef(params, tmp)
+    
+    def _undef(self, loc: Location):
+        """Handle #define directives."""
+        # Get an identifier to use as macro name.
+        tkn: Token = next(self.stack[-1], None)
+        if tkn == None:
+            raise_err("#undef expects an identifier", loc); return
+        elif tkn.type != TokenType.IDENTIFIER or not is_sym_str(tkn.val, allow_period=False):
+            raise_err("#undef expects an identifier", tkn.loc); return
+        if tkn.val not in self.macros:
+            raise_warn("#undef of non-existant macro", tkn.loc)
+        self._expect_eol()
+    
+    def _expand_macro(self, macro_name: Token) -> tuple[Token|None, list[Token]]:
+        """Expand a macro and output all its tokens."""
+        def recursive_expand(tokens: list[Token], no_expand: list[str]) -> list[Token]:
+            """Recursively expand macros."""
+            out = []
+            while len(tokens):
+                if tokens[0].type == TokenType.IDENTIFIER and tokens[0].val not in no_expand and tokens[0].val in self.macros:
+                    if not self.macros[tokens[0].val].params:
+                        # Recursively expand unparameterized macro.
+                        out.extend(expand_noparam(tokens[0], no_expand))
+                        tokens = tokens[1:]
+                    elif len(tokens) == 1 or tokens[1] != Token('(', TokenType.OTHER):
+                        # Parameterized macro without params; don't expand.
+                        out.append(tokens[0])
+                        tokens = tokens[1:]
+                    else:
+                        # Parse params for macro.
+                        params: list[list[Token]] = [[]]
+                        i = 2
+                        paren = 1
+                        while True:
+                            if i >= len(tokens):
+                                raise AsmError("Missing `)` in macro expansion", tokens[0].loc.including(tokens[-1].loc))
+                            elif tokens[i] == Token(',', TokenType.OTHER):
+                                params.append([])
+                            elif tokens[i] == Token(')', TokenType.OTHER):
+                                paren -= 1
+                                if paren == 0: break
+                                params[-1].append(tokens[i])
+                            elif tokens[i] == Token('(', TokenType.OTHER):
+                                paren += 1
+                                params[-1].append(tokens[i])
+                            else:
+                                params[-1].append(tokens[i])
+                            i += 1
+                        out.extend(expand_param(tokens[0], params, tokens[0].loc.including(tokens[i].loc), no_expand))
+                        tokens = tokens[i+1:]
+                else:
+                    out.append(tokens[0])
+                    tokens = tokens[1:]
+            return out
+        
+        def expand_noparam(macro_name: Token, no_expand: list[str] = []) -> list[Token]:
+            """Expand an unparameterized macro."""
+            out = []
+            for exp in self.macros[macro_name.val].tokens:
+                out.append(exp.with_loc(macro_name.loc.with_exp_from(exp.loc)))
+            return recursive_expand(out, no_expand + [macro_name.val])
+        
+        def expand_param(macro_name: Token, params: list[list[Token]], loc: Location, no_expand: list[str] = []) -> list[Token]:
+            """Expand a parameterized macro."""
+            macro = self.macros[macro_name.val]
+            if len(macro.params) != len(params) and (len(macro.params) != 0 or params != [[]]):
+                raise AsmError(f"Macro `{macro_name.val}` expects {len(macro.params)} args but got {len(params)} args", loc)
+            params_map = {macro.params[i]: params[i] for i in range(len(macro.params))}
+            out = []
+            for exp in macro.tokens:
+                if exp.type == TokenType.IDENTIFIER and exp.val in params_map:
+                    out.extend(x.with_loc(x.loc.with_exp_from(exp.loc)) for x in params_map[exp.val])
+                else:
+                    out.append(exp.with_loc(macro_name.loc.with_exp_from(exp.loc)))
+            return recursive_expand(out, no_expand + [macro_name.val])
+        
+        try:
+            if not self.macros[macro_name.val].params:
+                # Macro is unparameterized; don't try to parse params for it.
+                return None, expand_noparam(macro_name)
+            
+            tkn = next(self.stack[-1], None)
+            if tkn != Token('(', TokenType.OTHER) or tkn != None and tkn.loc.off != macro_name.loc.off + len(macro_name.val):
+                # Macro not expanded.
+                return tkn, [macro_name]
+            
+            # Grab params for this macro.
+            tmp = [tkn]
+            paren = 1
+            while paren:
+                tkn = next(self.stack[-1], None)
+                if tkn == None:
+                    raise AsmError("Missing `)` in macro expansion", macro_name.loc.including(tkn[-1].loc))
+                elif tkn == Token(')', TokenType.OTHER):
+                    paren -= 1
+                elif tkn == Token('(', TokenType.OTHER):
+                    paren += 1
+                tmp.append(tkn)
+            
+            # Parse params for this macro.
+            params: list[list[Token]] = [[]]
+            i = 1
+            while i < len(tmp) - 1:
+                if tmp[i] == Token(',', TokenType.OTHER):
+                    params.append([])
+                else:
+                    params[-1].append(tmp[i])
+                i += 1
+            
+            # Finally perform macro expansion.
+            return None, expand_param(macro_name, params, macro_name.loc.including(tmp[-1].loc))
+            
+        except AsmError as e:
+            # Error during macro expansion.
+            raise_err(e.args[0], e.loc)
+            self._eat_eol()
+            return None, []
     
     def __iter__(self):
+        tkn = None
         while len(self.stack):
-            # Get next token in current file.
-            tkn: Token = next(self.stack[-1], None)
             if tkn == None:
-                # File is empty, pop it off the stack.
-                self.stack.pop()
-                continue
-            
-            if tkn == Token('#', TokenType.OTHER):
+                pass
+            elif tkn == Token('#', TokenType.OTHER):
                 # Preproc directives.
                 directive: Token = next(self.stack[-1], None)
                 if directive == None:
@@ -566,16 +713,25 @@ class Preprocessor(Iterable[Token]):
                     match directive.val:
                         case "include": self._include(loc)
                         case "define":  self._define(loc)
+                        case "undef":   self._undef(loc)
                         case _:
                             raise_err(f"Unknown directive {directive.val}")
                             self._eat_eol()
-            elif tkn.type == TokenType.IDENTIFIER and tkn.val in self.defines:
+            elif tkn.type == TokenType.IDENTIFIER and tkn.val in self.macros:
                 # Replace defines.
-                for exp in self.defines[tkn.val]:
-                    yield exp.with_loc(tkn.loc.with_exp_from(exp.loc))
+                tkn, exp = self._expand_macro(tkn)
+                for x in exp: yield x
+                if tkn: continue
             else:
                 # Some normal token.
                 yield tkn
+            
+            # Get next token in current file.
+            tkn: Token = next(self.stack[-1], None)
+            if tkn == None:
+                # File is empty, pop it off the stack.
+                self.stack.pop()
+                continue
                 
 
 
@@ -673,7 +829,7 @@ def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
         elif args[i].type == TokenType.CONSTANT:
             args[i] = SymRef(args[i].val, None, args[i].loc)
         elif args[i].val not in valid_op and args[i].val not in '()':
-            raise AsmError(f"{args[i]} not expected here 0", args[i].loc)
+            raise AsmError(f"{args[i]} not expected here", args[i].loc)
     
     # Pass 1: Recursively evaluate parenthesized exprs.
     i = 0
@@ -709,14 +865,14 @@ def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
     
     # Pass 3: Binary operators.
     if type(args[0]) == Token:
-        raise AsmError(f"{args[0]} not expected here 1", args[0].loc)
+        raise AsmError(f"{args[0]} not expected here", args[0].loc)
     for oper in binary:
         i = 0
         while i < len(args)-2:
             if type(args[i+1]) != Token or args[i+1].type != TokenType.OTHER:
-                raise AsmError(f"{args[i+1]} not expected here 2", args[i+1].loc)
+                raise AsmError(f"{args[i+1]} not expected here", args[i+1].loc)
             if type(args[i+2]) == Token:
-                raise AsmError(f"{args[i+2]} not expected here 3", args[i+2].loc)
+                raise AsmError(f"{args[i+2]} not expected here", args[i+2].loc)
             if args[i+1].val in oper:
                 # Enforce exprs to be additive w.r.t. symbols.
                 if args[i+1] != '+':
@@ -732,7 +888,7 @@ def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
                 i += 2
     
     if type(args[0]) != SymRef:
-        raise AsmError(f"{args[0]} not expected here 4", args[0].loc)
+        raise AsmError(f"{args[0]} not expected here", args[0].loc)
     return args[0]
 
 
@@ -846,6 +1002,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             while args:
                 if Token(',', TokenType.OTHER) in args:
                     comma = args.index(Token(',', TokenType.OTHER))
+                    if comma == 0: raise AsmError("Expected an expression", args[comma].loc)
                     expr, args = parse_expr(args[:comma]), args[comma+1:]
                 else:
                     expr, args = parse_expr(args), []
@@ -875,7 +1032,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         if name == 'ret':
             # Return from subroutine.
             name = 'j'
-            args = [Token('(', TokenType.OTHER), TokenType(0, TokenType.CONSTANT), Token(')', TokenType.OTHER)]
+            args = [Token('(', TokenType.OTHER), Token(0, TokenType.CONSTANT), Token(')', TokenType.OTHER)]
         if name == 'li':
             # Load immediate.
             has_args  = True
@@ -1086,7 +1243,8 @@ def await_msg() -> tuple[str,int,dict]:
         if not line: break
         idx = line.index(':')
         headers[line[:idx]] = line[idx+1:].strip()
-    raw_data = sys.stdin.read(int(headers['Content-Length']))
+    content_length = int(headers['Content-Length'])
+    raw_data = sys.stdin.read(content_length)
     obj = json.JSONDecoder().decode(raw_data)
     assert 'jsonrpc' in obj and 'id' in obj and 'method' in obj and 'params' in obj
     assert type(obj['jsonrpc']) == str and 2 <= float(obj['jsonrpc']) < 3
@@ -1150,6 +1308,7 @@ def lsp_do_document_diagnostic(id: int, uri: str):
         return
     
     # Assemble the file to get all errors within.
+    db_print(f"Assembling {path} for diagnostics...")
     clear_msg_log()
     try:
         with open(path, "r") as fd:
@@ -1158,6 +1317,7 @@ def lsp_do_document_diagnostic(id: int, uri: str):
     except FileNotFoundError:
         send_err_msg(id, -32803, f"File not found: {path}")
         return
+    db_print("Done!")
     
     # Convert messages to the LSP diagnostic format.
     diagnostics: dict[str,list] = {}
@@ -1241,6 +1401,8 @@ def lsp_do_document_hover(id: int, uri: str, lsp_range: dict):
     # Provide information for found tokens.
     if macro_matches:
         loc = macro_matches[0].loc.exp_from
+        while loc.exp_from:
+            loc = loc.exp_from
         markdown  = f"Expanded from macro [`{loc.macro}`]"
         markdown += f"({file_path_to_uri(loc.file.path)}#L{loc.line})"
         markdown += f" defined in {loc.file.name}\n"
@@ -1322,6 +1484,7 @@ if __name__ == "__main__":
         if 0: # Set to 1 for debugging.
             fd = open("/home/julian/the_fpga/nanoproc/lsp.out", "a")
             sys.stderr = debug = fd
+            sys.stdin.reconfigure(line_buffering = 0)
             try:
                 lsp_main()
             except Exception as e:

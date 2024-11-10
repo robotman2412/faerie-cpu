@@ -1,0 +1,9 @@
+
+#include "macros.f8"
+#include "display.f8"
+#include "input.f8"
+
+
+.equ thing, 0xc0
+
+add2_mc(thing, 42069)
