@@ -57,6 +57,7 @@ class Location:
         self.inc_from = inc_from
         self.exp_from = exp_from
         self.macro    = macro
+        self.macro_inst: Location = None
     
     def __str__(self):
         return f"{self.file.name}:{self.line}:{self.col}"
@@ -656,7 +657,9 @@ class Preprocessor(Iterable[Token]):
         try:
             if not self.macros[macro_name.val].params:
                 # Macro is unparameterized; don't try to parse params for it.
-                return None, expand_noparam(macro_name)
+                tmp = expand_noparam(macro_name)
+                for x in tmp: x.loc.macro_inst = macro_name.loc
+                return None, 
             
             tkn = next(self.stack[-1], None)
             if tkn != Token('(', TokenType.OTHER) or tkn != None and tkn.loc.off != macro_name.loc.off + len(macro_name.val):
@@ -687,7 +690,9 @@ class Preprocessor(Iterable[Token]):
                 i += 1
             
             # Finally perform macro expansion.
-            return None, expand_param(macro_name, params, macro_name.loc.including(tmp[-1].loc))
+            tmp = expand_param(macro_name, params, macro_name.loc.including(tmp[-1].loc))
+            for x in tmp: x.loc.macro_inst = macro_name.loc
+            return None, tmp
             
         except AsmError as e:
             # Error during macro expansion.
@@ -766,11 +771,11 @@ class SymRef:
         else:
             return f"{self.offset}"
 
-def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
+def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}, start_loc: Location = None) -> SymRef:
     # Could I do this with an LR parser? Yes.
     # Will I convert this into an LR parser? No.
     if len(args) == 0:
-        raise ValueError("Empty expr")
+        raise AsmError("Expected expression", start_loc)
     
     args = args.copy()
     # Define operators.
@@ -847,7 +852,7 @@ def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}) -> SymRef:
             if type(args[x]) == Token and args[x].val == '(': depth += 1
             if type(args[x]) == Token and args[x].val == ')': depth -= 1
             x += 1
-        args = args[:i] + [parse_expr(args[i+1:x-1])] + args[x:]
+        args = args[:i] + [parse_expr(args[i+1:x-1], equ, args[i+1].loc)] + args[x:]
         i += 1
     
     # Pass 2: Collapse prefix operators.
@@ -984,15 +989,13 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             equ[args[0].val] = expr.offset
             
         elif directive.val == '.org':
-            if len(args) < 1: raise AsmError("Expected an expression")
-            expr = parse_expr(args, equ)
+            expr = parse_expr(args, equ, directive.loc)
             expr.assert_const()
             if expr.offset < addr: raise AsmError(f".org directive goes backwards", directive.loc.including(args[-1].loc))
             addr = expr.offset
             
         elif directive.val == '.zero':
-            if len(args) < 1: raise AsmError("Expected an expression")
-            expr = parse_expr(args, equ)
+            expr = parse_expr(args, equ, directive.loc)
             expr.assert_const()
             for i in range(expr.offset):
                 write_byte(0, directive.loc)
@@ -1002,10 +1005,9 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             while args:
                 if Token(',', TokenType.OTHER) in args:
                     comma = args.index(Token(',', TokenType.OTHER))
-                    if comma == 0: raise AsmError("Expected an expression", args[comma].loc)
-                    expr, args = parse_expr(args[:comma]), args[comma+1:]
+                    expr, args = parse_expr(args[:comma], equ, args[0].loc), args[comma+1:]
                 else:
-                    expr, args = parse_expr(args), []
+                    expr, args = parse_expr(args, equ, directive.loc), []
                 write_symref(expr, RelocType.BYTE)
             
         elif directive.val in ['.ascii', '.asciz']:
@@ -1086,19 +1088,19 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             if not allow_mem:
                 raise AsmError(f"Instruction {name} expression but got memory reference")
             amode = 1
-            val   = parse_expr(args[1:-1], equ)
+            val   = parse_expr(args[1:-1], equ, args[1].loc)
         elif len(args) >= 4 and args[0].type == TokenType.IDENTIFIER and args[0].val in ['zp', 'zpage', 'zeropage']\
             and args[1] == Token('[', TokenType.OTHER) and args[-1] == Token(']', TokenType.OTHER):
             # Memory reference (explicitly zero-page).
             if not allow_mem:
                 raise AsmError(f"Instruction {name} expression but got memory reference")
             amode = 0
-            val   = parse_expr(args[2:-1], equ)
+            val   = parse_expr(args[2:-1], equ, args[2].loc)
         elif len(args) >= 3 and args[0] == Token('[', TokenType.OTHER) and args[-1] == Token(']', TokenType.OTHER):
             # Memory reference.
             if not allow_mem:
                 raise AsmError(f"Instruction {name} expects expression but got memory reference")
-            val   = parse_expr(args[1:-1], equ)
+            val   = parse_expr(args[1:-1], equ, args[1].loc)
             if val.symbol or val.offset & 0xff00:
                 amode = 2 # Need 16-bit address
             else:
@@ -1109,7 +1111,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         else:
             # Constant expression.
             amode = 3
-            val   = parse_expr(args, equ)
+            val   = parse_expr(args, equ, name_loc)
         
         # Emit instruction.
         write_byte(opcode | (amode << 2) | (mode << 4), name_loc)
@@ -1376,6 +1378,7 @@ def lsp_do_document_hover(id: int, uri: str, lsp_range: dict):
     lsp_col  = lsp_range['character'] + 1
     
     def loc_matches(loc: Location) -> bool:
+        if loc.macro_inst: loc = loc.macro_inst
         if loc.file.path != path: return False
         if loc.line > lsp_line: return False
         if loc.col > lsp_col: return False

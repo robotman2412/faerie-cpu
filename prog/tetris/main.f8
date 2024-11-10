@@ -7,3 +7,5 @@
 .equ thing, 0xc0
 
 add2_mc(thing, 42069)
+
+add2_mc(,)
