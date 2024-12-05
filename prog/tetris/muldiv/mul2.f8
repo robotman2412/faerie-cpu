@@ -1,0 +1,19 @@
+
+// Multiply two 16-bit uints in a0-a1 and a2-a3 and return one 32-bit int in a0-a3.
+mul2:
+    mov2_mm(a4, a0)
+    mov2_mm(a6, a2)
+    li   0
+    st   [a0]
+    st   [a1]
+    st   [a2]
+    st   [a3]
+mul2.loop:
+    shr2_m(a4)
+    bcc  mul2.no_add
+    add2_mm(a0, a6)
+    addc2_mc(a2, 0)
+mul2.no_add:
+    shl2_m(a6)
+    bne  mul2.loop
+    ret

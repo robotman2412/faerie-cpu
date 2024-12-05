@@ -1,4 +1,75 @@
 
+// Link register (read-only).
+    .equ ra, 0x00
+// Flags register (read-only).
+    .equ fr, 0x02
+// Soft-stack pointer.
+    .equ sp, 0x10
+// Temporary space.
+    .equ __sys_tmp, 0x12
+// Function argument / return values.
+    .equ a0, 0x80
+    .equ a1, 0x81
+    .equ a2, 0x82
+    .equ a3, 0x83
+    .equ a4, 0x84
+    .equ a5, 0x85
+    .equ a6, 0x86
+    .equ a7, 0x87
+// Function temporary values.
+    .equ t0, 0x90
+    .equ t1, 0x91
+    .equ t2, 0x92
+    .equ t3, 0x93
+    .equ t4, 0x94
+    .equ t5, 0x95
+    .equ t6, 0x96
+    .equ t7, 0x97
+// Function callee-saved values.
+    .equ s0, 0xa0
+    .equ s1, 0xa1
+    .equ s2, 0xa2
+    .equ s3, 0xa3
+    .equ s4, 0xa4
+    .equ s5, 0xa5
+    .equ s6, 0xa6
+    .equ s7, 0xa7
+
+
+#define init_stack() li2_m(sp, 0x02ff)
+
+#define push() st (sp); add_mc(sp, -1)
+#define pop()  add_mc(sp, 1); ld (sp)
+
+#define push_m(maddr)  ld [maddr]; push()
+#define push_m2(maddr) push_m(maddr);  push_m(maddr+1)
+#define push_m4(maddr) push_m2(maddr); push_m2(maddr+2)
+#define push_m8(maddr) push_m4(maddr); push_m4(maddr+4)
+
+#define pop_m(maddr)  pop(); st [maddr]
+#define pop_m2(maddr) pop_m(maddr+1);  pop_m(maddr)
+#define pop_m4(maddr) pop_m2(maddr+2); pop_m2(maddr)
+#define pop_m8(maddr) pop_m4(maddr+4); pop_m4(maddr)
+
+#define push_ra() push_m2(ra)
+#define push_fr() push_m2(fr)
+#define pop_ret() pop_m2(__sys_tmp); j (__sys_tmp)
+#define pop_fr() pop(); shr
+#define ld_fr(maddr) ld [maddr]; shr
+
+
+#define li_m( maddr, val) li val; st [maddr]
+#define li2_m(maddr, val) li_m(maddr, (val) & 0xff); li_m((maddr)+1, (val) >> 8)
+#define li4_m(maddr, val) li2_m(maddr, (val) & 0xffff); li2_m((maddr)+2, (val) >> 16)
+#define li8_m(maddr, val) li4_m(maddr, (val) & 0xffffffff); li4_m((maddr)+4, (val) >> 32)
+
+
+#define mov_mm( maddr_a, maddr_b) ld [maddr_a]; mov [maddr_b]; st [maddr_a]
+#define mov2_mm(maddr_a, maddr_b) mov_mm( maddr_a, maddr_b); movc_mm( (maddr_a)+1, (maddr_b)+1)
+#define mov4_mm(maddr_a, maddr_b) mov2_mm(maddr_a, maddr_b); movc2_mm((maddr_a)+2, (maddr_b)+2)
+#define mov8_mm(maddr_a, maddr_b) mov4_mm(maddr_a, maddr_b); movc4_mm((maddr_a)+4, (maddr_b)+4)
+
+
 #define add_mc(maddr, val)  ld [maddr]; add  val; st [maddr]
 #define addc_mc(maddr, val) ld [maddr]; addc val; st [maddr]
 
@@ -15,11 +86,89 @@
 #define add_mm( maddr_a, maddr_b) ld [maddr_a]; add  [maddr_b]; st [maddr_a]
 #define addc_mm(maddr_a, maddr_b) ld [maddr_a]; addc [maddr_b]; st [maddr_a]
 
-#define add2_mm( maddr_a, maddr_b) add_mm( maddr_a, (maddr_b) & 0xff); addc_mm((maddr_a)+1, (maddr_b) >> 8)
-#define addc2_mm(maddr_a, maddr_b) addc_mm(maddr_a, (maddr_b) & 0xff); addc_mm((maddr_a)+1, (maddr_b) >> 8)
+#define add2_mm( maddr_a, maddr_b) add_mm( maddr_a, maddr_b); addc_mm((maddr_a)+1, (maddr_b)+1)
+#define addc2_mm(maddr_a, maddr_b) addc_mm(maddr_a, maddr_b); addc_mm((maddr_a)+1, (maddr_b)+1)
 
-#define add4_mm( maddr_a, maddr_b) add2_mm( maddr_a, (maddr_b) & 0xffff); addc2_mm((maddr_a)+2, (maddr_b) >> 16)
-#define addc4_mm(maddr_a, maddr_b) addc2_mm(maddr_a, (maddr_b) & 0xffff); addc2_mm((maddr_a)+2, (maddr_b) >> 16)
+#define add4_mm( maddr_a, maddr_b) add2_mm( maddr_a, maddr_b); addc2_mm((maddr_a)+2, (maddr_b)+2)
+#define addc4_mm(maddr_a, maddr_b) addc2_mm(maddr_a, maddr_b); addc2_mm((maddr_a)+2, (maddr_b)+2)
 
-#define add8_mm( maddr_a, maddr_b) add4_mm( maddr_a, (maddr_b) & 0xffffffff); addc4_mm((maddr_a)+4, (maddr_b) >> 32)
-#define addc8_mm(maddr_a, maddr_b) addc4_mm(maddr_a, (maddr_b) & 0xffffffff); addc4_mm((maddr_a)+4, (maddr_b) >> 32)
+#define add8_mm( maddr_a, maddr_b) add4_mm( maddr_a, maddr_b); addc4_mm((maddr_a)+4, (maddr_b)+4)
+#define addc8_mm(maddr_a, maddr_b) addc4_mm(maddr_a, maddr_b); addc4_mm((maddr_a)+4, (maddr_b)+4)
+
+
+#define sub_mc(maddr, val)  ld [maddr]; sub  val; st [maddr]
+#define subc_mc(maddr, val) ld [maddr]; subc val; st [maddr]
+
+#define sub2_mc(maddr, val)  sub_mc( maddr, (val) & 0xff); subc_mc((maddr)+1, (val) >> 8)
+#define subc2_mc(maddr, val) subc_mc(maddr, (val) & 0xff); subc_mc((maddr)+1, (val) >> 8)
+
+#define sub4_mc(maddr, val)  sub2_mc( maddr, (val) & 0xffff); subc2_mc((maddr)+2, (val) >> 16)
+#define subc4_mc(maddr, val) subc2_mc(maddr, (val) & 0xffff); subc2_mc((maddr)+2, (val) >> 16)
+
+#define sub8_mc(maddr, val)  sub4_mc( maddr, (val) & 0xffffffff); subc4_mc((maddr)+4, (val) >> 32)
+#define subc8_mc(maddr, val) subc4_mc(maddr, (val) & 0xffffffff); subc4_mc((maddr)+4, (val) >> 32)
+
+
+#define sub_mm( maddr_a, maddr_b) ld [maddr_a]; sub  [maddr_b]; st [maddr_a]
+#define subc_mm(maddr_a, maddr_b) ld [maddr_a]; subc [maddr_b]; st [maddr_a]
+
+#define sub2_mm( maddr_a, maddr_b) sub_mm( maddr_a, maddr_b); subc_mm((maddr_a)+1, (maddr_b)+1)
+#define subc2_mm(maddr_a, maddr_b) subc_mm(maddr_a, maddr_b); subc_mm((maddr_a)+1, (maddr_b)+1)
+
+#define sub4_mm( maddr_a, maddr_b) sub2_mm( maddr_a, maddr_b); subc2_mm((maddr_a)+2, (maddr_b)+2)
+#define subc4_mm(maddr_a, maddr_b) subc2_mm(maddr_a, maddr_b); subc2_mm((maddr_a)+2, (maddr_b)+2)
+
+#define sub8_mm( maddr_a, maddr_b) sub4_mm( maddr_a, maddr_b); subc4_mm((maddr_a)+4, (maddr_b)+4)
+#define subc8_mm(maddr_a, maddr_b) subc4_mm(maddr_a, maddr_b); subc4_mm((maddr_a)+4, (maddr_b)+4)
+
+
+#define cmp_mc(maddr, val)  ld [maddr]; cmp  val; st [maddr]
+#define cmpc_mc(maddr, val) ld [maddr]; cmpc val; st [maddr]
+
+#define cmp2_mc(maddr, val)  cmp_mc( maddr, (val) & 0xff); cmpc_mc((maddr)+1, (val) >> 8)
+#define cmpc2_mc(maddr, val) cmpc_mc(maddr, (val) & 0xff); cmpc_mc((maddr)+1, (val) >> 8)
+
+#define cmp4_mc(maddr, val)  cmp2_mc( maddr, (val) & 0xffff); cmpc2_mc((maddr)+2, (val) >> 16)
+#define cmpc4_mc(maddr, val) cmpc2_mc(maddr, (val) & 0xffff); cmpc2_mc((maddr)+2, (val) >> 16)
+
+#define cmp8_mc(maddr, val)  cmp4_mc( maddr, (val) & 0xffffffff); cmpc4_mc((maddr)+4, (val) >> 32)
+#define cmpc8_mc(maddr, val) cmpc4_mc(maddr, (val) & 0xffffffff); cmpc4_mc((maddr)+4, (val) >> 32)
+
+
+#define cmp_mm( maddr_a, maddr_b) ld [maddr_a]; cmp  [maddr_b]; st [maddr_a]
+#define cmpc_mm(maddr_a, maddr_b) ld [maddr_a]; cmpc [maddr_b]; st [maddr_a]
+
+#define cmp2_mm( maddr_a, maddr_b) cmp_mm( maddr_a, maddr_b); cmpc_mm((maddr_a)+1, (maddr_b)+1)
+#define cmpc2_mm(maddr_a, maddr_b) cmpc_mm(maddr_a, maddr_b); cmpc_mm((maddr_a)+1, (maddr_b)+1)
+
+#define cmp4_mm( maddr_a, maddr_b) cmp2_mm( maddr_a, maddr_b); cmpc2_mm((maddr_a)+2, (maddr_b)+2)
+#define cmpc4_mm(maddr_a, maddr_b) cmpc2_mm(maddr_a, maddr_b); cmpc2_mm((maddr_a)+2, (maddr_b)+2)
+
+#define cmp8_mm( maddr_a, maddr_b) cmp4_mm( maddr_a, maddr_b); cmpc4_mm((maddr_a)+4, (maddr_b)+4)
+#define cmpc8_mm(maddr_a, maddr_b) cmpc4_mm(maddr_a, maddr_b); cmpc4_mm((maddr_a)+4, (maddr_b)+4)
+
+
+#define shr_m( maddr) ld [maddr]; shr;  st [maddr]
+#define shrc_m(maddr) ld [maddr]; shrc; st [maddr]
+
+#define shr2_m( maddr) shr_m(maddr);  shrc_m(maddr+1)
+#define shrc2_m(maddr) shrc_m(maddr); shrc_m(maddr+1)
+
+#define shr4_m( maddr) shr2_m(maddr);  shrc2_m(maddr+2)
+#define shrc4_m(maddr) shrc2_m(maddr); shrc2_m(maddr+2)
+
+#define shr8_m( maddr) shr2_m(maddr);  shrc2_m(maddr+4)
+#define shrc8_m(maddr) shrc2_m(maddr); shrc2_m(maddr+4)
+
+
+#define shl_m( maddr) ld [maddr]; shl;  st [maddr]
+#define shlc_m(maddr) ld [maddr]; shlc; st [maddr]
+
+#define shl2_m( maddr) shl_m(maddr);  shlc_m(maddr+1)
+#define shlc2_m(maddr) shlc_m(maddr); shlc_m(maddr+1)
+
+#define shl4_m( maddr) shl2_m(maddr);  shlc2_m(maddr+2)
+#define shlc4_m(maddr) shlc2_m(maddr); shlc2_m(maddr+2)
+
+#define shl8_m( maddr) shl2_m(maddr);  shlc2_m(maddr+4)
+#define shlc8_m(maddr) shlc2_m(maddr); shlc2_m(maddr+4)

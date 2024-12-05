@@ -1,0 +1,28 @@
+
+// Divide the 8-bit a0 uint by a1 and return the remainder in a0 and division in a1.
+divmod:
+    mov_mm(t1, a1)
+    li_m(t0, 1)
+    li_m(a1, 0)
+    
+    // Shift left divisor as far as possible.
+divmod.loop0:
+    shl_m(t1)
+    bcs  divmod.l0
+    shl_m(t0)
+    j    divmod.loop0
+divmod.l0:
+    shrc_m(t1)
+    
+    // Division loop.
+divmod.loop1:
+    cmp_m(a0, t1)
+    blt  divmod.l1
+    sub_m(a0, t1)
+    add_m(a1, t0)
+divmod.l1:
+    shr_m(t1)
+    shr_m(t0)
+    bcc  divmod.loop1
+    
+    ret

@@ -946,7 +946,6 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
     a2l:     dict[int,Location] = {}
     addr = 0
     
-    
     def write_byte(value: int, loc: Location):
         nonlocal out, addr, a2l
         if addr > 65535: raise AsmError("Address overflow")

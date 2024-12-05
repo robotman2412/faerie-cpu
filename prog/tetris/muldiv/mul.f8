@@ -1,0 +1,17 @@
+
+// Multiply two 8-bit uints in a0 and a1 and return one 16-bit int in a0 and a1.
+mul:
+    mov_mm(a2, a0)
+    mov_mm(a3, a1)
+    li   0
+    st   [a0]
+    st   [a1]
+mul.loop:
+    shr_m(a2)
+    bcc  mul.no_add
+    add_mm(a0, a3)
+    addc_mc(a1, 0)
+mul.no_add:
+    shl_m(a3)
+    bne  mul.loop
+    ret
