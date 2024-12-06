@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+
+# The Faerie CPU assembler.
+# Yes, it could be more efficient for large files.
+# No, it does not matter; this CPU has a mere 16 bits of address space.
+
+import argparse, sys, os, traceback
+
+from asm import *
+from lsp import *
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Assembler for the Faerie CPU\nhttps://github.com/robotman2412/faerie-cpu")
+    parser.add_argument("--lsp",           action="store_true", help="ignore all other arguments and start in language server mode")
+    parser.add_argument("--stdio",         action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--lsp-debug",     action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--outfile", "-o", action="store", default="out.lhf")
+    parser.add_argument("--format", "-O",  action="store", choices=["binary", "logisim"], default="logisim")
+    parser.add_argument("infile",          action="store", nargs="?")
+    args = parser.parse_args()
+    
+    if args.lsp:
+        set_msg_handler(log_msg)
+        if 0: # Set to 1 for debugging.
+            fd = open("/home/julian/the_fpga/nanoproc/lsp.out", "a")
+            sys.stderr = debug = fd
+            sys.stdin.reconfigure(line_buffering = 0)
+            try:
+                lsp_main()
+            except Exception as e:
+                traceback.print_exc(file=debug)
+                debug.flush()
+                exit(1)
+        else:
+            try:
+                lsp_main()
+            except:
+                exit(1)
+        exit(0)
+    
+    if not args.infile:
+        print("Error: No input files")
+        exit(1)
+    
+    out = a2l = symbols = None
+    
+    try:
+        with open(args.infile, "r") as fd:
+            file = SourceFile(fd.read(), os.path.basename(args.infile), args.infile)
+            out, a2l, symbols = assemble_srcfile(file)
+    except FileNotFoundError:
+        print("File not found: " + args.infile)
+        exit(1)
+    
+    if has_errors():
+        exit(1)
+    
+    if args.format == "logisim":
+        with open(args.outfile, "w") as fd:
+            write_lhf(fd, out)
+    else:
+        with open(args.outfile, "wb") as fd:
+            write_bin(fd, out, 8)
+    
+    if len(symbols):
+        print("Symbols:")
+        for symname in symbols:
+            print(f"  {symname:10} = 0x{symbols[symname]:x}")
+    else:
+        print("No symbols defined")
