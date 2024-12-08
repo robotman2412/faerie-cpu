@@ -39,6 +39,18 @@ To set a pin to one of the following modes, set its corresponding PLE and PHE bi
 |  1  |  0  | Open-drain (floating or low) pin
 |  1  |  1  | Output pin
 
+### Button layout
+| Bit | Description
+| :-: | :----------
+|  0  | Accept button
+|  1  | Back button
+|  2  | Start button
+|  3  | Select button
+|  4  | DPAD up
+|  5  | DPAD down
+|  6  | DPAD left
+|  7  | DPAD right
+
 
 
 # Instruction Set & Architecture

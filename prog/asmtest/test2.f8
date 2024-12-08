@@ -1,5 +1,7 @@
 
 .org 0xc000
-    li 0
-    mov zp [0xcc], 0xf00dbabe
-    mov pw (0xce), (0xcc)
+    // li 0
+    // mov2 zp [0xcc], 0xf00dbabe
+    // mov2 pw (0xce), [0xcc]
+    // add8 [0xcc], [0xcd]
+    mov8 (8), (10)

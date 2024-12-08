@@ -60,13 +60,13 @@ class LogisimFd:
         return self.pos
 
 
-def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool):
+def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool, no_binary: bool):
     addr = infd.tell()
     insn = infd.read(1)
     if not insn: return False
     insn = insn[0]
     if not no_addr:
-        print(f"{addr:04x}    ", end="")
+        print(f"{addr:04x}:   ", end="")
     
     opcode = insn & 3
     amode  = (insn >> 2) & 3
@@ -81,16 +81,23 @@ def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool):
             operand_len += 1
             operand += infd.read(1)
     
+    if not no_binary:
+        tmp = f"{insn:02x}"
+        for arg in operand:
+            tmp += f" {arg:02x}"
+        print(f"{tmp:12s}", end="")
+    
     if opcode == 2 and mode \
         or opcode == 3 and mode >= len(branch_modes_r) \
-        or mode >= len(alu_modes_r) \
         or opcode < 2 and mode & 3 == 0 and amode != 3 \
         or opcode == 1 and mode & 7 == 5 \
         or opcode == 0 and mode == 13:
         print(f".byte 0x{insn:02x}  // Illegal insn: Opcode {opcode}, amode {amode}, mode {mode}")
         for i in range(len(operand)):
             if not no_addr:
-                print(f"{addr+i+1:04x}    ", end="")
+                print(f"{addr+i+1:04x}:   ", end="")
+            if not no_binary:
+                print(' ' * 12, end="")
             print(f".byte 0x{operand[i]:02x}  // Operand byte of illegal insn")
         return True
     
@@ -112,14 +119,14 @@ def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool):
     
     if amode == 0:
         if not operand:
-            print("(0x??)")
-        else:
-            print(f"(0x{operand[0]:02x})")
-    elif amode == 1:
-        if not operand:
             print("[0x??]")
         else:
             print(f"[0x{operand[0]:02x}]")
+    elif amode == 1:
+        if not operand:
+            print("(0x??)")
+        else:
+            print(f"(0x{operand[0]:02x})")
     elif amode == 2:
         if len(operand) == 0:
             print("[0x????]")
@@ -138,10 +145,11 @@ def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Disassembler for the Faerie CPU\nhttps://github.com/robotman2412/faerie-cpu")
-    parser.add_argument("--outfile", "-o", action="store", default=None)
-    parser.add_argument("--format", "-I",  action="store", choices=["binary", "logisim"], default="logisim")
-    parser.add_argument("--no-addr", "-n", action="store_true", help="Do not print the address before instructions")
-    parser.add_argument("infile",          action="store", nargs="?")
+    parser.add_argument("--outfile", "-o",   action="store", default=None)
+    parser.add_argument("--format", "-I",    action="store", choices=["binary", "logisim"], default="logisim")
+    parser.add_argument("--no-addr", "-a",   action="store_true", help="Do not print the address before instructions")
+    parser.add_argument("--no-binary", "-b", action="store_true", help="Do not print the raw bytes of instructions")
+    parser.add_argument("infile",            action="store", nargs="?")
     args = parser.parse_args()
     
     if args.format == "binary":
@@ -160,4 +168,4 @@ if __name__ == "__main__":
     else:
         outfd = sys.stdout
     
-    while disas(infd, outfd, args.no_addr): pass
+    while disas(infd, outfd, args.no_addr, args.no_binary): pass
