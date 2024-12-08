@@ -1,25 +1,45 @@
 
+import re
+
 from srcfile import *
 from asmerr import *
 from tokenizer import *
 from preproc import *
 from asmexpr import *
 
-alu_modes = [
+
+alu_modes_old = [
     'shl',  'xor',  'add',  'or',
     'shr',  'ld',   'sub',  'and',
     'shlc', 'xorc', 'addc', 'orc',
     'shrc', 'ldc',  'subc', 'andc'
 ]
-branch_modes = [
+branch_modes_old = [
     'beq', 'bcs', 'bgt', 'blt',
     'bne', 'bcc', 'ble', 'bge',
     'j',   'jsr'
 ]
-pseudo_ops = [
-    'mov'
-]
-mnemonics = alu_modes + branch_modes + pseudo_ops
+alu_modes = {
+    'shl': 0,
+    'xor': 1,
+    'add': 2,
+    'or':  3,
+    'shr': 4,
+    'sub': 6,
+    'and': 7,
+}
+branch_modes = {
+    'beq': 0,
+    'bcs': 1,
+    'bgt': 2,
+    'blt': 3,
+    'bne': 4,
+    'bcc': 5,
+    'ble': 6,
+    'bge': 7,
+    'j':   8,
+    'jsr': 9,
+}
 
 
 class RelocType(Enum):
@@ -28,6 +48,7 @@ class RelocType(Enum):
     ZPAGE = 2
     ZPPTR = 3
     BYTE  = 4
+    BYTES = 5
 
 class Reloc:
     def __init__(self, addr: int, sym: SymRef, type: RelocType, loc: Location=None, is_write: bool=False):
@@ -38,29 +59,113 @@ class Reloc:
         self.is_write = is_write
 
 class OperandType(Enum):
-    MEM   = 0
+    # Zero-page memory reference.
+    ZPAGE = 0
+    # Pointer reference.
     PTR   = 1
-    ZPAGE = 2
-    IMM   = 3
+    # Pointer reference that doesn't cross page boundaries.
+    P_PTR = 2
+    # Memory reference.
+    MEM   = 3
+    # Immediate value.
+    IMM   = 4
 
 class Operand:
-    def __init__(self, type: OperandType, value: SymRef):
+    def __init__(self, type: OperandType, value: SymRef, loc: Location = None):
         self.type  = type
         self.value = value
-
-class Insn:
-    def __init__(self, mnemonic: str, args: list[Operand]):
-        self.mnemonic = mnemonic
-        self.args     = args
+        self.loc   = loc or self.value.loc
+    
+    def __repr__(self):
+        return f"Operand({repr(self.type)}, {repr(self.value)}, {repr(self.loc)})"
+    
+    def __str__(self):
+        match self.type:
+            case OperandType.ZPAGE: return f"zpage [{self.value}]"
+            case OperandType.MEM: return f"[{self.value}]"
+            case OperandType.PTR: return f"({self.value})"
+            case OperandType.P_PTR: return f"pwrap ({self.value})"
+            case OperandType.IMM: return str(self.value)
+    
+    def next_byte(self) -> Self:
+        new_value = SymRef(self.value.offset, self.value.symbol, self.value.loc, self.value.type)
+        if self.type == OperandType.IMM:
+            new_value.assert_const()
+            new_value.offset >>= 8
+        else:
+            new_value.offset += 1
+        return Operand(self.type, new_value, self.loc)
+    
+    def ptr2mem(self) -> Self:
+        assert self.type == OperandType.PTR or self.type == OperandType.P_PTR
+        new_value = SymRef(self.value.offset, self.value.symbol, self.value.loc, self.value.type)
+        return Operand(OperandType.ZPAGE, new_value, self.loc)
     
     @staticmethod
-    def parse(args: list[Token]) -> Self:
-        pass
+    def parse(args: list[Token], equ: dict[str,int]) -> Self:
+        if args[0].type == TokenType.IDENTIFIER and args[0].val.lower() in ['zp', 'zpage', 'zeropage']:
+            args.pop(0)
+            tkn = args.pop(0)
+            if tkn != Token('[', TokenType.OTHER):
+                raise AsmError("Expected [", tkn.loc)
+            val = parse_expr(args[:-1], equ, tkn.loc)
+            tkn = args.pop()
+            if tkn != Token(']', TokenType.OTHER):
+                raise AsmError("Expected ]", tkn.loc)
+            return Operand(OperandType.ZPAGE, val)
+            
+        elif args[0] == Token('[', TokenType.OTHER):
+            tkn = args.pop(0)
+            val = parse_expr(args[:-1], equ, tkn.loc)
+            tkn = args.pop()
+            if tkn != Token(']', TokenType.OTHER):
+                raise AsmError("Expected ]", tkn.loc)
+            return Operand(OperandType.MEM, val)
+            
+        elif args[0].type == TokenType.IDENTIFIER and args[0].val.lower() in ['pw', 'pwrap', 'PAGEWRAP']:
+            args.pop(0)
+            tkn = args.pop(0)
+            if tkn != Token('(', TokenType.OTHER):
+                raise AsmError("Expected (", tkn.loc)
+            val = parse_expr(args[:-1], equ, tkn.loc)
+            tkn = args.pop()
+            if tkn != Token(')', TokenType.OTHER):
+                raise AsmError("Expected )", tkn.loc)
+            return Operand(OperandType.P_PTR, val)
+            
+        elif args[0] == Token('(', TokenType.OTHER):
+            tkn = args.pop(0)
+            val = parse_expr(args[:-1], equ, tkn.loc)
+            tkn = args.pop()
+            if tkn != Token(')', TokenType.OTHER):
+                raise AsmError("Expected )", tkn.loc)
+            return Operand(OperandType.PTR, val)
+            
+        else:
+            return Operand(OperandType.IMM, parse_expr(args))
 
+class Insn:
+    def __init__(self, mnemonic: str, args: list[Operand], loc: Location = None):
+        self.mnemonic = mnemonic
+        self.args     = args
+        self.loc      = loc
+    
+    @staticmethod
+    def parse(line: list[Token], equ: dict[str,int]) -> Self:
+        loc                 = line[0].loc
+        mnemonic: str       = line.pop(0).val.lower()
+        comma               = Token(',', TokenType.OTHER)
+        args: list[Operand] = []
+        if line:
+            while comma in line:
+                idx = line.index(comma)
+                args.append(Operand.parse(line[:idx], equ))
+                if len(line) == idx - 1:
+                    raise AsmError("Expected operand after ,", line[-1].loc)
+                line = line[idx+1:]
+            args.append(Operand.parse(line, equ))
+        return Insn(mnemonic, args, loc)
 
-def is_mnemonic(tkn: Token) -> bool:
-    if tkn.type != TokenType.IDENTIFIER: return False
-    pass
 
 def an(s):
     return f'an {s}' if s[0] in 'aeiou' else f'a {s}'
@@ -170,7 +275,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         else:
             raise AsmError(f"Uknown directive `{directive.val}`")
     
-    def handle_insn(args: list[Token]):
+    def handle_insn_old(args: list[Token]):
         nonlocal equ, symbols, reloc
         name_loc = args[0].loc
         name, args = args[0].val.lower(), args[1:]
@@ -189,16 +294,16 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             allow_mem = False
             mode      = 5
             opcode    = 0
-        elif name in alu_modes:
+        elif name in alu_modes_old:
             # ALU ops.
             has_args  = name[:2] != 'sh'
-            mode      = alu_modes.index(name)
+            mode      = alu_modes_old.index(name)
             opcode    = 0
             allow_imm = name[:2] != 'ld'
-        elif name.endswith('.cmp') and name[:-4] in alu_modes:
+        elif name.endswith('.cmp') and name[:-4] in alu_modes_old:
             # ALU ops (compare mode).
             has_args  = name[:2] != 'sh'
-            mode      = alu_modes.index(name[:-4])
+            mode      = alu_modes_old.index(name[:-4])
             opcode    = 1
             allow_imm = name[:2] != 'ld'
         elif name == 'st':
@@ -207,10 +312,10 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             mode      = 0
             opcode    = 2
             allow_imm = False
-        elif name in branch_modes:
+        elif name in branch_modes_old:
             # Branch ops.
             has_args  = True
-            mode      = branch_modes.index(name)
+            mode      = branch_modes_old.index(name)
             opcode    = 3
             allow_imm = False
         else:
@@ -275,6 +380,160 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         else:
             write_symref(val, RelocType.BYTE,  opcode == 2)
     
+    def encode_insn(opcode: int, mode: int, arg: Operand|None, loc: Location, is_repeat: bool = False):
+        assert opcode >= 0 and opcode <= 3
+        assert mode >= 0 and mode <= 15
+        if opcode == 2:
+            assert arg.type != OperandType.IMM
+        if opcode <= 1 and mode & 3 == 0:
+            assert not arg
+            amode = 3
+        else:
+            assert arg
+            match arg.type:
+                case OperandType.ZPAGE: amode = 0
+                case OperandType.PTR:   amode = 1
+                case OperandType.P_PTR: amode = 1
+                case OperandType.MEM:   amode = 2
+                case OperandType.IMM:   amode = 3
+        
+        write_byte(mode << 4 | amode << 2 | opcode, loc)
+        if opcode <= 1 and mode & 3 == 0:
+            return
+        match arg.type:
+            case OperandType.ZPAGE:
+                write_symref(arg.value, RelocType.ZPAGE, opcode == 2)
+            case OperandType.PTR:
+                write_symref(arg.value, RelocType.ZPPTR, opcode == 2)
+            case OperandType.MEM:
+                write_symref(arg.value, RelocType.MEMLO, opcode == 2)
+                write_symref(arg.value, RelocType.MEMHI, opcode == 2)
+            case OperandType.IMM:
+                write_symref(arg.value, RelocType.BYTES if is_repeat else RelocType.BYTE, opcode == 2)
+    
+    def build_pseudo_op(args: list[Operand], calc_mode: int|None, cmp_mode: bool, range: range, loc: Location):
+        if calc_mode == None:
+            if len(args) < 2:
+                raise AsmError("Expected memory reference or pointer, value", loc)
+            elif len(args) > 2:
+                raise AsmError("Too many operands", args[2].loc.including(args[-1].loc))
+            elif args[0].type == OperandType.IMM:
+                raise AsmError("Expected memory reference or pointer", args[0].loc)
+        
+        def next_byte(arg: Operand):
+            if arg.type == OperandType.PTR:
+                ptr = arg.ptr2mem()
+                encode_insn(0, 5, ptr, loc)
+                encode_insn(0, 2, Operand(OperandType.IMM, SymRef(range.step)), loc)
+                encode_insn(2, 0, ptr, loc)
+                ptr = ptr.next_byte()
+                encode_insn(0, 5, ptr, loc)
+                encode_insn(1, 2, Operand(OperandType.IMM, SymRef()), loc)
+                encode_insn(2, 0, ptr, loc)
+            elif arg.type == OperandType.P_PTR:
+                ptr = arg.ptr2mem()
+                encode_insn(0, 5, ptr, loc)
+                encode_insn(0, 2, Operand(OperandType.IMM, SymRef(range.step)), loc)
+                encode_insn(2, 0, ptr, loc)
+            return arg.next_byte()
+        
+        for _ in range:
+            if calc_mode == None:
+                # Load instruction (mov edition).
+                encode_insn(1, 5, args[1], loc, True)
+                args[1] = next_byte(args[1])
+            else:
+                # Load instruction.
+                encode_insn(1, 5, args[0], loc)
+                if calc_mode & 3 == 0:
+                    # Shift instruction.
+                    encode_insn(+cmp_mode, calc_mode, None, loc)
+                else:
+                    # Other ALU instruction.
+                    encode_insn(+cmp_mode, calc_mode, args[1], loc, True)
+                    args[1] = next_byte(args[1])
+            # Store instruction.
+            if not cmp_mode:
+                encode_insn(2, 0, args[0], loc, True)
+            args[0] = next_byte(args[0])
+    
+    def handle_insn(insn: Insn):
+        # Get repetition number from insn.
+        matches: re.Match = re.match(f"^({'|'.join(alu_modes.keys())}|mov)([248])+(\\.cmp)?$", insn.mnemonic)
+        if matches:
+            mnemonic = matches.group(1) + (matches.group(3) or "")
+            repeat   = int(matches.group(2))
+        else:
+            mnemonic = insn.mnemonic
+            repeat   = 1
+        
+        if mnemonic == 'cmp':
+            mnemonic = 'sub'
+            cmp_mode = True
+        elif mnemonic.endswith(".cmp"):
+            mnemonic = mnemonic[:-4]
+            cmp_mode = True
+        
+        # Pseudo-ops.
+        if mnemonic == 'mov':
+            build_pseudo_op(insn.args, None, False, range(repeat), insn.loc)
+            return
+        elif mnemonic == 'shr' and (insn.args or repeat > 1):
+            build_pseudo_op(insn.args, alu_modes[mnemonic], cmp_mode, range(repeat - 1, -1, -1), insn.loc)
+            return
+        elif mnemonic in alu_modes and repeat > 1:
+            build_pseudo_op(insn.args, alu_modes[mnemonic], cmp_mode, range(repeat), insn.loc)
+            return
+        elif (mnemonic in branch_modes_old or mnemonic in ["ld", "st", "li"]) and repeat > 1:
+            raise AsmError(f"Instruction {mnemonic} cannot be repeated")
+        
+        # Regular instructions.
+        if mnemonic == "shl" or mnemonic == "shr":
+            # SHL and SHR (no operands).
+            if insn.args:
+                raise AsmError(f"Too many operands for {mnemonic}", insn.args[1].loc.including(insn.args[-1].loc))
+            encode_insn(+cmp_mode, alu_modes[mnemonic], None, insn.loc)
+            # Skip one arg check.
+            return
+            
+        elif mnemonic in alu_modes:
+            # Other ALU instructions.
+            if len(insn.args) == 0:
+                raise AsmError(f"Expected value", insn.loc)
+            encode_insn(+cmp_mode, alu_modes[mnemonic], None, insn.loc)
+            
+        elif mnemonic in branch_modes:
+            # Branches.
+            if len(insn.args) == 0:
+                raise AsmError(f"Expected memory reference", insn.loc)
+            elif insn.args[0].type == OperandType.IMM:
+                raise AsmError(f"Expected memory reference", insn.args[0].loc)
+            encode_insn(3, branch_modes[mnemonic], insn.args[0], insn.loc)
+        
+        elif mnemonic == 'li':
+            # Load immediate.
+            if len(insn.args) == 0:
+                raise AsmError(f"Expected immediate value", insn.loc)
+            elif insn.args[0].type != OperandType.IMM:
+                raise AsmError(f"Expected immediate value", insn.args[0].loc)
+            encode_insn(0, 5, insn.args[0], insn.loc)
+        
+        elif mnemonic == 'st':
+            # Memory store.
+            if len(insn.args) == 0:
+                raise AsmError(f"Expected memory reference", insn.loc)
+            elif insn.args[0].type == OperandType.IMM:
+                raise AsmError(f"Expected memory reference", insn.args[0].loc)
+            encode_insn(2, 0, insn.args[0].loc, insn.loc)
+            
+        else:
+            # Illegal instruction.
+            raise AsmError(f"No such instruction `{mnemonic}`", insn.loc)
+        
+        if len(insn.args) > 1:
+            # Instructions other than SHL and SHR have exactly one operand.
+            raise AsmError(f"Too many operands for {mnemonic}", insn.args[1].loc.including(insn.args[-1].loc))
+    
     
     # Pass 1: Write data and reloc entries, find labels.
     line: list[Token] = []
@@ -283,7 +542,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             line.append(token)
             continue
         try:
-            if len(line) >= 2 and line[0].type == TokenType.IDENTIFIER and line[1] == Token(':', TokenType.OTHER):
+            while len(line) >= 2 and line[0].type == TokenType.IDENTIFIER and line[1] == Token(':', TokenType.OTHER):
                 handle_label(line[0].val)
                 line = line[2:]
             if len(line) == 0: continue
@@ -292,7 +551,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             elif line[0].val[0] == '.':
                 handle_directive(line[0], line[1:])
             else:
-                handle_insn(line)
+                handle_insn(Insn.parse(line, equ))
         except AsmError as e:
             if not e.loc:
                 raise_err(*e.args, line[0].loc.including(line[-1].loc))
@@ -326,6 +585,8 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
                 if relval < 0 or relval > 65535:
                     raise_err(f"Address {relval} out of range (0-65535)", rel.loc); continue
                 relval >>= 8
+            case RelocType.BYTES:
+                pass
             case RelocType.BYTE:
                 if relval < -128 or relval > 255:
                     raise_warn(f"Value truncated from {relval} to {relval & 255}", rel.loc)

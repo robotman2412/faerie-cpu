@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+
+import argparse, sys
+from typing import *
+
+alu_modes_r = [
+    'shl',
+    'xor',
+    'add',
+    'or',
+    'shr',
+    'ld',
+    'sub',
+    'and',
+]
+branch_modes_r = [
+    'beq',
+    'bcs',
+    'bgt',
+    'blt',
+    'bne',
+    'bcc',
+    'ble',
+    'bge',
+    'j',
+    'jsr',
+]
+
+class LogisimFd:
+    def __init__(self, fd: TextIO):
+        self.fd = fd
+        tmp = fd.read(9)
+        if tmp[-1] != '\n':
+            raise ValueError(f"Illegal header: {repr(tmp)}")
+        tmp = tmp.strip()
+        if tmp != "v2.0 raw" and tmp != "v1.0 raw":
+            raise ValueError(f"Illegal header: {repr(tmp)}")
+        self.pos = 0
+    
+    def _read1(self) -> int|None:
+        buf = ""
+        while True:
+            tmp = self.fd.read(1)
+            if tmp.strip() == "": break
+            buf += tmp
+        if not buf: return None
+        self.pos += 1
+        return int(buf, 16)
+    
+    def read(self, size = -1) -> bytes:
+        buf = []
+        if size == -1: size = 1 << 64
+        for _ in range(size):
+            tmp = self._read1()
+            if tmp == None: break
+            buf.append(tmp)
+        return bytes(buf)
+    
+    def tell(self) -> int:
+        return self.pos
+
+
+def disas(infd: TextIO | LogisimFd, outfd: TextIO, no_addr: bool):
+    addr = infd.tell()
+    insn = infd.read(1)
+    if not insn: return False
+    insn = insn[0]
+    if not no_addr:
+        print(f"{addr:04x}    ", end="")
+    
+    opcode = insn & 3
+    amode  = (insn >> 2) & 3
+    mode   = insn >> 4
+    
+    operand_len = 0
+    operand = b""
+    if opcode >= 2 or mode & 3 != 0:
+        operand_len += 1
+        operand += infd.read(1)
+        if amode == 2:
+            operand_len += 1
+            operand += infd.read(1)
+    
+    if opcode == 2 and mode \
+        or opcode == 3 and mode >= len(branch_modes_r) \
+        or mode >= len(alu_modes_r) \
+        or opcode < 2 and mode & 3 == 0 and amode != 3 \
+        or opcode == 1 and mode & 7 == 5 \
+        or opcode == 0 and mode == 13:
+        print(f".byte 0x{insn:02x}  // Illegal insn: Opcode {opcode}, amode {amode}, mode {mode}")
+        for i in range(len(operand)):
+            if not no_addr:
+                print(f"{addr+i+1:04x}    ", end="")
+            print(f".byte 0x{operand[i]:02x}  // Operand byte of illegal insn")
+        return True
+    
+    if len(operand) < operand_len:
+        print(f".byte 0x{insn:02x}  // Missing operand: ", end="")
+    
+    if opcode < 2 and mode & 3 == 0:
+        print("shr" if mode == 4 else "shl")
+        return True
+    elif opcode < 2:
+        mode_str = alu_modes_r[mode & 7]
+        if mode & 8: mode_str += "c"
+        if opcode: mode_str += ".cmp"
+        print(f"{mode_str:8s}", end="")
+    elif opcode == 2:
+        print("st      ", end="")
+    elif opcode == 3:
+        print(f"{branch_modes_r[mode]:8s}", end="")
+    
+    if amode == 0:
+        if not operand:
+            print("(0x??)")
+        else:
+            print(f"(0x{operand[0]:02x})")
+    elif amode == 1:
+        if not operand:
+            print("[0x??]")
+        else:
+            print(f"[0x{operand[0]:02x}]")
+    elif amode == 2:
+        if len(operand) == 0:
+            print("[0x????]")
+        if len(operand) == 1:
+            print(f"[0x??{operand[0]:02x}]")
+        else:
+            print(f"[0x{operand[1]:02x}{operand[0]:02x}]")
+    else:
+        if not operand:
+            print("0x??")
+        else:
+            print(f"0x{operand[0]:02x}")
+    
+    return True
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Disassembler for the Faerie CPU\nhttps://github.com/robotman2412/faerie-cpu")
+    parser.add_argument("--outfile", "-o", action="store", default=None)
+    parser.add_argument("--format", "-I",  action="store", choices=["binary", "logisim"], default="logisim")
+    parser.add_argument("--no-addr", "-n", action="store_true", help="Do not print the address before instructions")
+    parser.add_argument("infile",          action="store", nargs="?")
+    args = parser.parse_args()
+    
+    if args.format == "binary":
+        if args.infile:
+            infd = open(args.infile, "rb")
+        else:
+            infd = sys.stdin.buffer
+    elif args.format == "logisim":
+        if args.infile:
+            infd = LogisimFd(open(args.infile, "r"))
+        else:
+            infd = LogisimFd(sys.stdin)
+    
+    if args.outfile:
+        outfd = open(args.outfile, "w")
+    else:
+        outfd = sys.stdout
+    
+    while disas(infd, outfd, args.no_addr): pass

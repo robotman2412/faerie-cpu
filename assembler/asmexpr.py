@@ -26,15 +26,15 @@ class SymRef:
             raise AsmError("%lo is not supported in constant expressions", self.loc)
     
     def __repr__(self):
-        return f"SymRef({self.offset}, {repr(self.symbol)})"
+        return f"SymRef(0x{self.offset:x}, {repr(self.symbol)})"
     
     def __str__(self):
         if self.symbol and self.offset:
-            return f"{self.symbol}+{self.offset}"
+            return f"{self.symbol}+0x{self.offset:x}"
         elif self.symbol:
             return f"{self.symbol}"
         else:
-            return f"{self.offset}"
+            return f"0x{self.offset:x}"
 
 def parse_expr(args: list[Token|SymRef], equ: dict[str,int] = {}, start_loc: Location = None) -> SymRef:
     # Could I do this with an LR parser? Yes.

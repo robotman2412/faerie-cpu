@@ -109,12 +109,12 @@ The ALU is designed to be as compact as possible while still supporting the ADD/
 
 ### ALU modes
 Flag behaviours:
-| M3  | Opcode  | Carry in  | Use flags
-| :-: | :-----: | :-------: | :-------:
-|  0  |    0    |  default  |     y
-|  1  |    0    | from flag |     y
-|  0  |    1    |  default  |     n
-|  1  |    1    | from flag |     n
+| M3  | Opcode  | Carry in  | Store result
+| :-: | :-----: | :-------: | :-----------:
+|  0  |    0    |  default  |       y
+|  1  |    0    | from flag |       y
+|  0  |    1    |  default  |       n
+|  1  |    1    | from flag |       n
 
 Arithmetic and logic operations:
 | M2  | M1  | M0  | Has arg | Arithmetic operation
@@ -127,3 +127,5 @@ Arithmetic and logic operations:
 |  1  |  0  |  1  |    y    | B
 |  1  |  1  |  0  |    y    | A - B
 |  1  |  1  |  1  |    y    | A & B
+
+Note: ALU modes 1101 and 0101 do not write to the flags register. This means that `ld` and `li` will never change the flags register.
