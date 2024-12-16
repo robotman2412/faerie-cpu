@@ -53,7 +53,7 @@ print.check:
     cmp  (a0), 0
     bne  [print.loop]
     j    (ra)
-
+    
 print.invis:
     add2 [t0], 7
     j    [print.next]
