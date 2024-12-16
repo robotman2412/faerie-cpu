@@ -10,11 +10,25 @@ class MacroDef:
         self.params = params
         self.tokens = tokens
 
+class PragmaOnce:
+    def __init__(self, path: str, line: int):
+        self.realpath = os.path.realpath(path)
+        self.line     = line
+    
+    def __eq__(self, other: Self):
+        if type(other) != PragmaOnce:
+            return False
+        return self.realpath == other.realpath and self.line == other.line
+    
+    def __hash__(self):
+        return hash(self.realpath)
+
 class Preprocessor(Iterable[Token]):
-    def __init__(self, tokens: Iterator[Token], inc_path: list[str] = ['.'], macros: dict[str,MacroDef] = {}):
+    def __init__(self, tokens: Iterator[Token], inc_path: list[str] = ['.'], macros: dict[str,MacroDef] = {}, once: set[PragmaOnce] = set()):
         self.stack    = [tokens]
         self.inc_path = inc_path
         self.macros   = macros
+        self.once     = once
     
     def find_include_file(self, name: str, relative_to: str = None) -> str:
         if relative_to:
@@ -117,6 +131,24 @@ class Preprocessor(Iterable[Token]):
         if tkn.val not in self.macros:
             raise_warn("#undef of non-existant macro", tkn.loc)
         self._expect_eol()
+    
+    def _pragma(self, loc: Location):
+        tkn: Token = next(self.stack[-1], None)
+        if tkn.type != TokenType.IDENTIFIER:
+            raise_err("Expected an identifier", tkn.loc)
+            self._eat_eol()
+            return
+        elif tkn.val != "once":
+            raise_err("Unknown pragma", tkn.loc)
+            self._eat_eol()
+            return
+        self._expect_eol()
+        pragma_once = PragmaOnce(tkn.loc.file.path, tkn.loc.line)
+        if pragma_once in self.once:
+            while next(self.stack[-1], None) != None:
+                pass
+        else:
+            self.once.add(pragma_once)
     
     def _expand_macro(self, macro_name: Token) -> tuple[Token|None, list[Token]]:
         """Expand a macro and output all its tokens."""
@@ -246,6 +278,7 @@ class Preprocessor(Iterable[Token]):
                         case "include": self._include(loc)
                         case "define":  self._define(loc)
                         case "undef":   self._undef(loc)
+                        case "pragma":  self._pragma(loc)
                         case _:
                             raise_err(f"Unknown directive {directive.val}")
                             self._eat_eol()

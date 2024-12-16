@@ -1,4 +1,8 @@
 
+#pragma once
+
+#include "charset.f8"
+#include "macros.f8"
 
 print:
     mov2 [t0], display

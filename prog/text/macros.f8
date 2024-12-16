@@ -1,4 +1,6 @@
 
+#pragma once
+
 // Link register (read-only).
     .equ ra, 0x00
 // Flags register (read-only).
