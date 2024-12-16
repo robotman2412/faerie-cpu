@@ -16,6 +16,7 @@ print.loop:
     bge  [print.invis]
     
     // Get address in bitmap.
+    // Multiply offset by 7.
     st   [t4]
     shl
     shl
@@ -26,6 +27,7 @@ print.loop:
     shl2 [t2]
     sub  [t2], [t4]
     subc [t3], 0
+    // Add charset address.
     add  [t2], %lo(charset)
     addc [t3], %hi(charset)
     
