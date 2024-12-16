@@ -9,13 +9,20 @@ from asmexpr import *
 
 
 alu_modes = {
-    'shl': 0,
-    'xor': 1,
-    'add': 2,
-    'or':  3,
-    'shr': 4,
-    'sub': 6,
-    'and': 7,
+    'shl':  0,
+    'xor':  1,
+    'add':  2,
+    'or':   3,
+    'shr':  4,
+    'sub':  6,
+    'and':  7,
+    'shlc': 8,
+    'xorc': 9,
+    'addc': 10,
+    'orc':  11,
+    'shrc': 12,
+    'subc': 14,
+    'andc': 15,
 }
 branch_modes = {
     'beq': 0,
@@ -111,7 +118,7 @@ class Operand:
                 raise AsmError("Expected ]", tkn.loc)
             return Operand(OperandType.MEM, val)
             
-        elif args[0].type == TokenType.IDENTIFIER and args[0].val.lower() in ['pw', 'pwrap', 'PAGEWRAP']:
+        elif args[0].type == TokenType.IDENTIFIER and args[0].val.lower() in ['pw', 'pwrap', 'pagewrap']:
             args.pop(0)
             tkn = args.pop(0)
             if tkn != Token('(', TokenType.OTHER):
@@ -131,13 +138,19 @@ class Operand:
             return Operand(OperandType.PTR, val)
             
         else:
-            return Operand(OperandType.IMM, parse_expr(args))
+            return Operand(OperandType.IMM, parse_expr(args, equ))
 
 class Insn:
     def __init__(self, mnemonic: str, args: list[Operand], loc: Location = None):
         self.mnemonic = mnemonic
         self.args     = args
         self.loc      = loc
+    
+    def __str__(self):
+        return f"{self.mnemonic:8s}" + ", ".join(str(x) for x in self.args)
+    
+    def __repr__(self):
+        return f"Insn({repr(self.mnemonic)}, {repr(self.args)}, {repr(self.loc)})"
     
     @staticmethod
     def parse(line: list[Token], equ: dict[str,int]) -> Self:
@@ -200,9 +213,9 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         nonlocal out, reloc, addr, a2l
         if addr > 65535: raise AsmError("Address overflow")
         a2l[addr] = ref.loc
-        if type == RelocType.BYTE and ref.type == SymRefType.HIGH:
+        if (type == RelocType.BYTE or type == RelocType.BYTES) and ref.type == SymRefType.HIGH:
             type = RelocType.MEMHI
-        elif type == RelocType.BYTE and ref.type == SymRefType.LOW:
+        elif (type == RelocType.BYTE or type == RelocType.BYTES) and ref.type == SymRefType.LOW:
             type = RelocType.MEMLO
         elif ref.type == SymRefType.HIGH:
             raise AsmError("%hi not allowed here", ref.loc)
@@ -279,8 +292,8 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
                 case OperandType.PTR:   amode = 1
                 case OperandType.P_PTR: amode = 1
                 case OperandType.MEM:
-                    arg.type = OperandType.ZPAGE
                     if not arg.value.symbol and arg.value.offset <= 255:
+                        arg.type = OperandType.ZPAGE
                         amode = 0
                     else:
                         amode = 2
@@ -310,6 +323,15 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
                 raise AsmError("Too many operands", args[2].loc.including(args[-1].loc))
             elif args[0].type == OperandType.IMM:
                 raise AsmError("Expected memory reference or pointer", args[0].loc)
+        elif calc_mode & 3 == 0:
+            if len(args) < 1:
+                raise AsmError("Expected memory reference", loc)
+            elif len(args) > 1:
+                raise AsmError("Too many operands", args[1].loc.including(args[-1].loc))
+            elif args[0].type == OperandType.IMM:
+                raise AsmError("Expected memory reference or pointer", args[0].loc)
+            elif (args[0].type == OperandType.P_PTR or args[0].type == OperandType.PTR) and len(r) > 1:
+                raise AsmError("Multiple-byte computation with pointers is unsupported")
         else:
             if len(args) < 2:
                 raise AsmError("Expected memory reference, value", loc)
@@ -396,6 +418,9 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
         if mnemonic == 'cmp':
             mnemonic = 'sub'
             cmp_mode = True
+        elif mnemonic == 'cmpc':
+            mnemonic = 'subc'
+            cmp_mode = True
         elif mnemonic.endswith(".cmp"):
             mnemonic = mnemonic[:-4]
             cmp_mode = True
@@ -403,10 +428,10 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             cmp_mode = False
         
         # Pseudo-ops.
-        if mnemonic == 'mov':
+        if mnemonic == "mov":
             build_pseudo_op(insn.args, None, False, range(repeat), insn.loc)
             return
-        elif mnemonic == 'shr' and (insn.args or repeat > 1):
+        elif (mnemonic == "shr" or mnemonic == "shrc") and (insn.args or repeat > 1):
             build_pseudo_op(insn.args, alu_modes[mnemonic], cmp_mode, range(repeat - 1, -1, -1), insn.loc)
             return
         elif mnemonic in alu_modes and (len(insn.args) > 1 or repeat > 1):
@@ -414,7 +439,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
             return
         
         # Regular instructions.
-        if mnemonic == "shl" or mnemonic == "shr":
+        if mnemonic in ["shl", "shr", "shlc", "shrc"]:
             # SHL and SHR (no operands).
             if insn.args:
                 raise AsmError(f"Too many operands for {mnemonic}", insn.args[1].loc.including(insn.args[-1].loc))
@@ -436,6 +461,14 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
                 raise AsmError(f"Expected memory reference", insn.args[0].loc)
             encode_insn(3, branch_modes[mnemonic], insn.args[0], insn.loc)
         
+        elif mnemonic == 'ld':
+            # Load immediate.
+            if len(insn.args) == 0:
+                raise AsmError(f"Expected memory reference", insn.loc)
+            elif insn.args[0].type == OperandType.IMM:
+                raise AsmError(f"Expected memory reference", insn.args[0].loc)
+            encode_insn(0, 5, insn.args[0], insn.loc)
+        
         elif mnemonic == 'li':
             # Load immediate.
             if len(insn.args) == 0:
@@ -450,7 +483,7 @@ def assemble(raw: Iterable[Token]) -> tuple[list[int], dict[int,Location], dict[
                 raise AsmError(f"Expected memory reference", insn.loc)
             elif insn.args[0].type == OperandType.IMM:
                 raise AsmError(f"Expected memory reference", insn.args[0].loc)
-            encode_insn(2, 0, insn.args[0].loc, insn.loc)
+            encode_insn(2, 0, insn.args[0], insn.loc)
             
         else:
             # Illegal instruction.

@@ -1,0 +1,53 @@
+
+    .org 0xc000
+    j [_start]
+
+#include "macros.f8"
+#include "print.f8"
+#include "charset.f8"
+
+
+
+_start:
+    li   0
+    st   [display+0]
+    st   [display+1]
+    st   [display+2]
+    st   [display+3]
+    st   [display+4]
+    st   [display+5]
+    st   [display+6]
+    st   [display+7]
+    st   [display+8]
+    st   [display+9]
+    st   [display+10]
+    st   [display+11]
+    st   [display+12]
+    st   [display+13]
+    st   [display+14]
+    st   [display+15]
+    st   [display+16]
+    st   [display+17]
+    st   [display+18]
+    st   [display+19]
+    st   [display+20]
+    st   [display+21]
+    st   [display+22]
+    st   [display+23]
+    st   [display+24]
+    st   [display+25]
+    st   [display+26]
+    st   [display+27]
+    st   [display+28]
+    st   [display+29]
+    st   [display+30]
+    st   [display+31]
+    mov  [a0], %lo(msg)
+    mov  [a1], %hi(msg)
+    jsr  [print]
+hlt:
+    j    [hlt]
+
+
+msg:
+    .asciz "Hi!"

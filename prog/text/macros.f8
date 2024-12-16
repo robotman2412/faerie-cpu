@@ -1,0 +1,62 @@
+
+// Link register (read-only).
+    .equ ra, 0x00
+// Flags register (read-only).
+    .equ fr, 0x02
+// Soft-stack pointer.
+    .equ sp, 0x10
+// Temporary space.
+    .equ __sys_tmp, 0x12
+// Function argument / return values.
+    .equ a0, 0x80
+    .equ a1, 0x81
+    .equ a2, 0x82
+    .equ a3, 0x83
+    .equ a4, 0x84
+    .equ a5, 0x85
+    .equ a6, 0x86
+    .equ a7, 0x87
+// Function temporary values.
+    .equ t0, 0x90
+    .equ t1, 0x91
+    .equ t2, 0x92
+    .equ t3, 0x93
+    .equ t4, 0x94
+    .equ t5, 0x95
+    .equ t6, 0x96
+    .equ t7, 0x97
+// Function callee-saved values.
+    .equ s0, 0xa0
+    .equ s1, 0xa1
+    .equ s2, 0xa2
+    .equ s3, 0xa3
+    .equ s4, 0xa4
+    .equ s5, 0xa5
+    .equ s6, 0xa6
+    .equ s7, 0xa7
+
+// Address of display.
+    .equ display, 0x8000
+    .equ buttons, 0x9000
+
+
+#define init_stack() mov2 [sp], 0x01ff
+
+#define push() st (sp); add_mc(sp, -1)
+#define pop()  add_mc(sp, 1); ld (sp)
+
+#define push_m(maddr)  ld [maddr]; push()
+#define push_m2(maddr) push_m(maddr);  push_m(maddr+1)
+#define push_m4(maddr) push_m2(maddr); push_m2(maddr+2)
+#define push_m8(maddr) push_m4(maddr); push_m4(maddr+4)
+
+#define pop_m(maddr)  pop(); st [maddr]
+#define pop_m2(maddr) pop_m(maddr+1);  pop_m(maddr)
+#define pop_m4(maddr) pop_m2(maddr+2); pop_m2(maddr)
+#define pop_m8(maddr) pop_m4(maddr+4); pop_m4(maddr)
+
+#define push_ra() push_m2(ra)
+#define push_fr() push_m(fr)
+#define pop_ret() pop_m2(__sys_tmp); j (__sys_tmp)
+#define pop_fr() pop(); shr
+#define ld_fr(maddr) ld [maddr]; shr

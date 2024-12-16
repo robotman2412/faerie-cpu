@@ -1,0 +1,54 @@
+
+
+print:
+    mov2 [t0], display
+    j    [print.check]
+    
+print.loop:
+    // Test printability.
+    sub  0x21
+    blt  [print.invis]
+    cmp  94
+    bge  [print.invis]
+    
+    // Get address in bitmap.
+    st   [t4]
+    shl
+    shl
+    st   [t2]
+    li   0
+    shlc
+    st   [t3]
+    shl2 [t2]
+    sub  [t2], [t4]
+    subc [t3], 0
+    add  [t2], %lo(charset)
+    addc [t3], %hi(charset)
+    
+    // Copy 7 bytes from the bitmap.
+    li   0
+    st   [t4]
+    
+print.loop2:
+    ld   (t2)
+    st   (t0)
+    add2 [t2], 1
+    add2 [t0], 1
+    add  [t4], 1
+    
+print.check2:
+    cmp  7
+    blt  [print.loop2]
+    
+print.next:
+    add2 [a0], 1
+    
+print.check:
+    cmp  (a0), 0
+    bne  [print.loop]
+    j    (ra)
+
+print.invis:
+    add2 [t0], 7
+    j    [print.next]
+
